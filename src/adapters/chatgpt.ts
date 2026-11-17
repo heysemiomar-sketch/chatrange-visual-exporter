@@ -1,19 +1,28 @@
-import type { ChatAdapter } from './base';
+import type { ChatAdapter, ConversationTurn, MessageRole } from './base';
 
-const SEMANTIC_TURN_SELECTORS = [
+const ASSISTANT_SELECTORS = [
   '[data-markdown-text-style="assistant-message"]',
+  '[data-message-author-role="assistant"]',
   'article[data-testid^="conversation-turn-"]',
-  '[data-testid^="conversation-turn-"]',
-  '[data-message-author-role]',
-  '[data-message-id]',
 ];
 
-const STRUCTURAL_FALLBACK_SELECTORS = [
+const USER_SELECTORS = [
+  '[data-user-message-bubble="true"]',
+  '[data-message-author-role="user"]',
+  'div.bg-user-message.text-user-message',
+];
+
+const ASSISTANT_FALLBACK_SELECTORS = [
   'div[class^="MarkdownRoot-"]',
   'div[class*=" MarkdownRoot-"]',
-  'p[class^="Paragraph-"]',
-  'p[class*=" Paragraph-"]',
 ];
+
+interface SelectorResult {
+  selector: string | null;
+  elements: HTMLElement[];
+}
+
+type UnindexedConversationTurn = Omit<ConversationTurn, 'logicalIndex'>;
 
 function isHTMLElement(element: Element): element is HTMLElement {
   return element instanceof HTMLElement;
@@ -23,7 +32,7 @@ function isUsableElement(element: HTMLElement): boolean {
   const rectangle = element.getBoundingClientRect();
   const textLength = element.textContent?.trim().length ?? 0;
 
-  return rectangle.width > 0 && rectangle.height > 20 && textLength > 0;
+  return rectangle.width > 0 && rectangle.height > 0 && textLength > 0;
 }
 
 function removeNestedDuplicates(elements: HTMLElement[]): HTMLElement[] {
@@ -41,21 +50,47 @@ function queryUsableElements(selector: string): HTMLElement[] {
   );
 }
 
-function findFirstMatchingGroup(selectors: string[]): HTMLElement[] {
+function findFirstMatchingGroup(selectors: string[]): SelectorResult {
   for (const selector of selectors) {
-    const matches = queryUsableElements(selector);
+    const elements = queryUsableElements(selector);
 
-    if (matches.length > 0) {
-      console.info('ChatRange: matched ChatGPT selector.', {
+    if (elements.length > 0) {
+      return {
         selector,
-        count: matches.length,
-      });
-
-      return matches;
+        elements,
+      };
     }
   }
 
-  return [];
+  return {
+    selector: null,
+    elements: [],
+  };
+}
+
+function compareDocumentOrder(first: HTMLElement, second: HTMLElement): number {
+  if (first === second) {
+    return 0;
+  }
+
+  const position = first.compareDocumentPosition(second);
+
+  if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+    return -1;
+  }
+
+  if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function createTurns(elements: HTMLElement[], role: MessageRole): UnindexedConversationTurn[] {
+  return elements.map((element) => ({
+    role,
+    element,
+  }));
 }
 
 export const chatGptAdapter: ChatAdapter = {
@@ -65,23 +100,38 @@ export const chatGptAdapter: ChatAdapter = {
     );
   },
 
-  findConversationTurns(): HTMLElement[] {
-    const semanticMatches = findFirstMatchingGroup(SEMANTIC_TURN_SELECTORS);
+  findConversationTurns(): ConversationTurn[] {
+    const assistantResult = findFirstMatchingGroup(ASSISTANT_SELECTORS);
 
-    if (semanticMatches.length > 0) {
-      return semanticMatches;
-    }
+    const effectiveAssistantResult =
+      assistantResult.elements.length > 0
+        ? assistantResult
+        : findFirstMatchingGroup(ASSISTANT_FALLBACK_SELECTORS);
 
-    const fallbackMatches = findFirstMatchingGroup(STRUCTURAL_FALLBACK_SELECTORS);
+    const userResult = findFirstMatchingGroup(USER_SELECTORS);
 
-    if (fallbackMatches.length > 0) {
-      console.warn('ChatRange: using a structural fallback selector.');
+    const unorderedTurns = [
+      ...createTurns(effectiveAssistantResult.elements, 'assistant'),
+      ...createTurns(userResult.elements, 'user'),
+    ];
 
-      return fallbackMatches;
-    }
+    const orderedTurns = unorderedTurns.sort((first, second) =>
+      compareDocumentOrder(first.element, second.element),
+    );
 
-    console.warn('ChatRange: no supported message structure was found.');
+    const turns = orderedTurns.map((turn, logicalIndex) => ({
+      ...turn,
+      logicalIndex,
+    }));
 
-    return [];
+    console.info('ChatRange: ChatGPT adapter detection.', {
+      assistantSelector: effectiveAssistantResult.selector,
+      assistantCount: effectiveAssistantResult.elements.length,
+      userSelector: userResult.selector,
+      userCount: userResult.elements.length,
+      mountedTurnCount: turns.length,
+    });
+
+    return turns;
   },
 };

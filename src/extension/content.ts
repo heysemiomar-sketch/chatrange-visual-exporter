@@ -1,12 +1,20 @@
+import type { ConversationTurn, MessageRole } from '../adapters/base';
 import { chatGptAdapter } from '../adapters/chatgpt';
 
 const HIGHLIGHT_ATTRIBUTE = 'data-chatrange-highlighted';
+
 const STATUS_ID = 'chatrange-status';
+
+const ROLE_COLORS: Record<MessageRole, string> = {
+  user: '#3b82f6',
+  assistant: '#10a37f',
+};
 
 function showStatus(message: string, type: 'success' | 'error'): void {
   document.getElementById(STATUS_ID)?.remove();
 
   const status = document.createElement('div');
+
   status.id = STATUS_ID;
   status.textContent = message;
 
@@ -15,7 +23,7 @@ function showStatus(message: string, type: 'success' | 'error'): void {
     top: '20px',
     right: '20px',
     zIndex: '2147483647',
-    maxWidth: '360px',
+    maxWidth: '400px',
     padding: '12px 16px',
     borderRadius: '8px',
     backgroundColor: type === 'success' ? '#047857' : '#b91c1c',
@@ -41,13 +49,12 @@ function clearPreviousHighlight(): void {
   for (const element of highlightedElements) {
     element.style.removeProperty('outline');
     element.style.removeProperty('outline-offset');
-    element.style.removeProperty('background-color');
     element.removeAttribute(HIGHLIGHT_ATTRIBUTE);
   }
 }
 
-function intersectsViewport(element: HTMLElement): boolean {
-  const rectangle = element.getBoundingClientRect();
+function intersectsViewport(turn: ConversationTurn): boolean {
+  const rectangle = turn.element.getBoundingClientRect();
 
   return (
     rectangle.width > 0 &&
@@ -57,15 +64,17 @@ function intersectsViewport(element: HTMLElement): boolean {
   );
 }
 
-function distanceFromViewportCenter(element: HTMLElement): number {
-  const rectangle = element.getBoundingClientRect();
+function distanceFromViewportCenter(turn: ConversationTurn): number {
+  const rectangle = turn.element.getBoundingClientRect();
+
   const elementCenter = rectangle.top + rectangle.height / 2;
+
   const viewportCenter = window.innerHeight / 2;
 
   return Math.abs(elementCenter - viewportCenter);
 }
 
-function selectVisibleTurn(turns: HTMLElement[]): HTMLElement | undefined {
+function selectVisibleTurn(turns: ConversationTurn[]): ConversationTurn | undefined {
   return turns
     .filter(intersectsViewport)
     .sort(
@@ -73,9 +82,26 @@ function selectVisibleTurn(turns: HTMLElement[]): HTMLElement | undefined {
     )[0];
 }
 
-function highlightConversationTurn(): void {
-  console.info('ChatRange content script loaded.');
+function highlightTurn(turn: ConversationTurn): void {
+  const color = ROLE_COLORS[turn.role];
 
+  turn.element.setAttribute(HIGHLIGHT_ATTRIBUTE, 'true');
+
+  turn.element.style.setProperty('outline', `5px solid ${color}`, 'important');
+
+  turn.element.style.setProperty('outline-offset', '5px', 'important');
+
+  turn.element.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  });
+}
+
+function countRole(turns: ConversationTurn[], role: MessageRole): number {
+  return turns.filter((turn) => turn.role === role).length;
+}
+
+function run(): void {
   clearPreviousHighlight();
 
   if (!chatGptAdapter.isSupportedPage()) {
@@ -84,26 +110,37 @@ function highlightConversationTurn(): void {
   }
 
   const turns = chatGptAdapter.findConversationTurns();
+
   const target = selectVisibleTurn(turns) ?? turns[0];
 
   if (!target) {
-    showStatus('ChatRange: no message blocks were found.', 'error');
+    showStatus('ChatRange: no mounted conversation turns found.', 'error');
     return;
   }
 
-  target.setAttribute(HIGHLIGHT_ATTRIBUTE, 'true');
-  target.style.setProperty('outline', '5px solid #10a37f', 'important');
-  target.style.setProperty('outline-offset', '5px', 'important');
-  target.style.setProperty('background-color', 'rgba(16, 163, 127, 0.08)', 'important');
+  highlightTurn(target);
 
-  target.scrollIntoView({
-    behavior: 'smooth',
-    block: 'center',
+  const userCount = countRole(turns, 'user');
+
+  const assistantCount = countRole(turns, 'assistant');
+
+  showStatus(
+    `ChatRange: ${turns.length} mounted turns ` +
+      `(${userCount} user, ` +
+      `${assistantCount} assistant). ` +
+      `Selected ${target.role} ` +
+      `#${target.logicalIndex}.`,
+    'success',
+  );
+
+  console.info('ChatRange: selected conversation turn.', {
+    role: target.role,
+    logicalIndex: target.logicalIndex,
+    mountedTurnCount: turns.length,
+    userCount,
+    assistantCount,
+    element: target.element,
   });
-
-  showStatus(`ChatRange: detected ${turns.length} assistant message block(s).`, 'success');
-
-  console.info('ChatRange: highlighted assistant message.', target);
 }
 
-highlightConversationTurn();
+run();
