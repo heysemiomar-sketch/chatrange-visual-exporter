@@ -1,5 +1,11 @@
 import { chatGptAdapter } from '../adapters/chatgpt';
 
+import {
+  createCaptureCancellationSession,
+  isCaptureCancelledError,
+  throwIfCaptureCancelled,
+} from '../core/capture-cancellation';
+
 import type {
   CaptureFailure,
   CaptureResult,
@@ -24,6 +30,8 @@ const CAPTURE_UI_ATTRIBUTES = [
   'data-chatrange-picker-end',
   'data-chatrange-picker-range',
 ];
+
+let captureInProgress = false;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -172,9 +180,7 @@ function clearCaptureUi(): void {
 function waitForCleanPaint(): Promise<void> {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        resolve();
-      });
+      requestAnimationFrame(() => resolve());
     });
   });
 }
@@ -218,70 +224,107 @@ async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Pr
 }
 
 async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
-  clearCaptureUi();
-  await waitForCleanPaint();
+  const cancellation = createCaptureCancellationSession();
 
-  showStatus('ChatRange: capturing multi-viewport segments...', 'info');
+  let segmentCapture: Awaited<ReturnType<typeof captureMultiViewportSegments>> | null = null;
 
-  const segmentCapture = await captureMultiViewportSegments(range.turns, {
-    onProgress(completedSegments, totalSegments): void {
-      showStatus(
-        `ChatRange: captured segment ` + `${completedSegments} of ${totalSegments}.`,
-        'info',
-      );
-    },
-  });
+  try {
+    clearCaptureUi();
+    await waitForCleanPaint();
 
-  showStatus(
-    `ChatRange: composing ` + `${segmentCapture.capturedSegmentCount} segment(s)...`,
-    'info',
-  );
+    throwIfCaptureCancelled(cancellation.signal);
 
-  const composition = await composeMultiViewportCapture(segmentCapture);
+    showStatus('ChatRange: capturing multi-viewport segments. Press Escape to cancel.', 'info');
 
-  console.info('ChatRange: multi-viewport capture composed.', {
-    sessionId: composition.sessionId,
-    captureId: composition.captureId,
-    segmentCount: composition.segmentCount,
-    width: composition.width,
-    height: composition.height,
-    expiresAt: composition.expiresAt,
-    originalScrollTopCssPx: segmentCapture.originalScrollTopCssPx,
-    restoredScrollTopCssPx: segmentCapture.restoredScrollTopCssPx,
-  });
+    segmentCapture = await captureMultiViewportSegments(range.turns, cancellation.signal, {
+      onProgress(completedSegments, totalSegments): void {
+        showStatus(
+          `ChatRange: captured segment ` +
+            `${completedSegments} of ${totalSegments}. ` +
+            `Press Escape to cancel.`,
+          'info',
+        );
+      },
+    });
 
-  /*
-   * Remove large Data URL references after
-   * composition has completed.
-   */
-  segmentCapture.segments.length = 0;
+    throwIfCaptureCancelled(cancellation.signal);
 
-  showStatus(
-    `ChatRange: composed ${composition.segmentCount} ` +
-      `segment(s) into a ${composition.width} × ` +
-      `${composition.height} PNG.`,
-    'success',
-  );
+    showStatus(
+      `ChatRange: composing ` +
+        `${segmentCapture.capturedSegmentCount} segment(s). ` +
+        `Press Escape to cancel.`,
+      'info',
+    );
+
+    const composition = await composeMultiViewportCapture(segmentCapture, cancellation.signal);
+
+    throwIfCaptureCancelled(cancellation.signal);
+
+    console.info('ChatRange: multi-viewport capture composed.', {
+      sessionId: composition.sessionId,
+      captureId: composition.captureId,
+      segmentCount: composition.segmentCount,
+      width: composition.width,
+      height: composition.height,
+      expiresAt: composition.expiresAt,
+      originalScrollTopCssPx: segmentCapture.originalScrollTopCssPx,
+      restoredScrollTopCssPx: segmentCapture.restoredScrollTopCssPx,
+    });
+
+    showStatus(
+      `ChatRange: composed ${composition.segmentCount} ` +
+        `segment(s) into a ${composition.width} × ` +
+        `${composition.height} PNG.`,
+      'success',
+    );
+  } catch (error: unknown) {
+    if (isCaptureCancelledError(error)) {
+      console.info('ChatRange: capture cancelled.');
+
+      showStatus('ChatRange: capture cancelled.', 'error');
+
+      return;
+    }
+
+    throw error;
+  } finally {
+    if (segmentCapture) {
+      segmentCapture.segments.length = 0;
+    }
+
+    cancellation.dispose();
+  }
 }
 
 async function processReadyRange(range: SelectedRange): Promise<void> {
-  const rectangle = getRangeRectangle(range);
-
-  if (isRangeFullyVisible(rectangle)) {
-    showStatus(`ChatRange: capturing ${range.turns.length} visible turn(s).`, 'success');
-
-    await captureVisibleRange(range, rectangle);
+  if (captureInProgress) {
+    showStatus('ChatRange: a capture is already in progress.', 'error');
 
     return;
   }
 
-  await captureAndComposeLongRange(range);
+  captureInProgress = true;
+
+  try {
+    const rectangle = getRangeRectangle(range);
+
+    if (isRangeFullyVisible(rectangle)) {
+      showStatus(`ChatRange: capturing ${range.turns.length} visible turn(s).`, 'success');
+
+      await captureVisibleRange(range, rectangle);
+
+      return;
+    }
+
+    await captureAndComposeLongRange(range);
+  } finally {
+    captureInProgress = false;
+  }
 }
 
 function handleReadyRange(range: SelectedRange): void {
   void processReadyRange(range).catch((error: unknown) => {
-    const message =
-      error instanceof Error ? error.message : 'Unknown multi-viewport capture failure.';
+    const message = error instanceof Error ? error.message : 'Unknown capture failure.';
 
     console.error('ChatRange: range processing failed.', error);
 

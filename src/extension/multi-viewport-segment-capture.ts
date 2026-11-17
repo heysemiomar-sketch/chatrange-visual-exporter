@@ -1,5 +1,7 @@
 import type { ConversationTurn } from '../adapters/base';
 
+import { throwIfCaptureCancelled } from '../core/capture-cancellation';
+
 import type {
   CaptureFailure,
   CaptureRectangle,
@@ -229,8 +231,13 @@ function getViewport(): CaptureViewport {
 
 async function requestSegmentCapture(
   request: CaptureVisibleSegmentRequest,
+  signal: AbortSignal,
 ): Promise<CaptureVisibleSegmentSuccess> {
+  throwIfCaptureCancelled(signal);
+
   const response = (await chrome.runtime.sendMessage(request)) as unknown;
+
+  throwIfCaptureCancelled(signal);
 
   if (isCaptureFailure(response)) {
     throw new MultiViewportSegmentCaptureError(
@@ -315,8 +322,11 @@ function calculateActualOverlapCssPx(
 
 export async function captureMultiViewportSegments(
   turns: ConversationTurn[],
+  signal: AbortSignal,
   callbacks: MultiViewportSegmentCaptureCallbacks = {},
 ): Promise<MultiViewportSegmentCaptureResult> {
+  throwIfCaptureCancelled(signal);
+
   const plan = createMultiViewportScrollPlan({
     turns,
   });
@@ -342,7 +352,11 @@ export async function captureMultiViewportSegments(
   try {
     await waitForCleanPaint();
 
+    throwIfCaptureCancelled(signal);
+
     for (let segmentIndex = 0; segmentIndex < plan.positionsCssPx.length; segmentIndex += 1) {
+      throwIfCaptureCancelled(signal);
+
       const requestedScrollTopCssPx = plan.positionsCssPx[segmentIndex];
 
       if (requestedScrollTopCssPx === undefined) {
@@ -353,7 +367,11 @@ export async function captureMultiViewportSegments(
 
       const actualScrollTopCssPx = await scrollToPosition(container, requestedScrollTopCssPx);
 
+      throwIfCaptureCancelled(signal);
+
       await waitForCleanPaint();
+
+      throwIfCaptureCancelled(signal);
 
       const crop = getVisibleRangeCrop(container, rangeBounds, actualScrollTopCssPx);
 
@@ -378,7 +396,9 @@ export async function captureMultiViewportSegments(
         viewport,
       };
 
-      const response = await requestSegmentCapture(request);
+      const response = await requestSegmentCapture(request, signal);
+
+      throwIfCaptureCancelled(signal);
 
       assertConsistentDimensions(segments, response);
 
@@ -404,6 +424,16 @@ export async function captureMultiViewportSegments(
 
       callbacks.onProgress?.(segmentIndex + 1, plan.positionsCssPx.length);
     }
+
+    throwIfCaptureCancelled(signal);
+  } catch (error: unknown) {
+    /*
+     * Explicitly release large Data URL references
+     * when capture fails or is cancelled.
+     */
+    segments.length = 0;
+
+    throw error;
   } finally {
     try {
       await scrollToPosition(container, originalScrollTopCssPx);
