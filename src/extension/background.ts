@@ -1,6 +1,8 @@
 import type {
   CaptureFailure,
   CaptureResult,
+  CaptureVisibleRangeRequest,
+  ProcessVisibleCaptureRequest,
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
@@ -9,6 +11,10 @@ import { isCaptureVisibleRangeRequest } from '../core/capture-messages';
 const SUPPORTED_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
 
 const PREVIEW_STORAGE_KEY = 'chatrange-preview-capture';
+
+const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
+
+let creatingOffscreenDocument: Promise<void> | null = null;
 
 function isSupportedUrl(urlString: string | undefined): boolean {
   if (!urlString) {
@@ -36,33 +42,93 @@ function createFailure(
   };
 }
 
-async function handleVisibleCapture(requestId: string, windowId: number): Promise<CaptureResult> {
+function isCaptureSuccess(result: CaptureResult): result is ProcessVisibleCaptureSuccess {
+  return result.type === 'process-visible-capture-success';
+}
+
+async function hasOffscreenDocument(): Promise<boolean> {
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+    documentUrls: [offscreenUrl],
+  });
+
+  return contexts.length > 0;
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (await hasOffscreenDocument()) {
+    return;
+  }
+
+  if (!creatingOffscreenDocument) {
+    creatingOffscreenDocument = chrome.offscreen
+      .createDocument({
+        url: OFFSCREEN_DOCUMENT_PATH,
+        reasons: [chrome.offscreen.Reason.BLOBS],
+        justification: 'Crop a visible-tab screenshot into the selected conversation range.',
+      })
+      .finally(() => {
+        creatingOffscreenDocument = null;
+      });
+  }
+
+  await creatingOffscreenDocument;
+}
+
+async function processScreenshot(
+  request: CaptureVisibleRangeRequest,
+  screenshotDataUrl: string,
+): Promise<CaptureResult> {
+  await ensureOffscreenDocument();
+
+  const processRequest: ProcessVisibleCaptureRequest = {
+    type: 'process-visible-capture',
+    requestId: request.requestId,
+    screenshotDataUrl,
+    crop: request.crop,
+    viewport: request.viewport,
+  };
+
+  return (await chrome.runtime.sendMessage(processRequest)) as CaptureResult;
+}
+
+async function storeAndOpenPreview(result: ProcessVisibleCaptureSuccess): Promise<void> {
+  await chrome.storage.local.set({
+    [PREVIEW_STORAGE_KEY]: result,
+  });
+
+  await chrome.tabs.create({
+    url: chrome.runtime.getURL('preview.html'),
+  });
+}
+
+async function handleVisibleCapture(
+  request: CaptureVisibleRangeRequest,
+  windowId: number,
+): Promise<CaptureResult> {
   try {
     const screenshotDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
       format: 'png',
     });
 
-    const result: ProcessVisibleCaptureSuccess = {
-      type: 'process-visible-capture-success',
-      requestId,
-      pngDataUrl: screenshotDataUrl,
-      width: 0,
-      height: 0,
-    };
+    const result = await processScreenshot(request, screenshotDataUrl);
 
-    await chrome.storage.local.set({
-      [PREVIEW_STORAGE_KEY]: result,
-    });
-
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL('preview.html'),
-    });
+    if (isCaptureSuccess(result)) {
+      await storeAndOpenPreview(result);
+    }
 
     return result;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown capture failure.';
 
-    return createFailure(requestId, 'CAPTURE_FAILED', message);
+    console.error('ChatRange: visible capture failed.', {
+      requestId: request.requestId,
+      message,
+    });
+
+    return createFailure(request.requestId, 'CAPTURE_FAILED', message);
   }
 }
 
@@ -107,7 +173,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return false;
   }
 
-  void handleVisibleCapture(message.requestId, windowId).then(sendResponse);
+  void handleVisibleCapture(message, windowId)
+    .then(sendResponse)
+    .catch((error: unknown) => {
+      const failureMessage =
+        error instanceof Error ? error.message : 'Unexpected background capture failure.';
+
+      sendResponse(createFailure(message.requestId, 'CAPTURE_FAILED', failureMessage));
+    });
 
   return true;
 });

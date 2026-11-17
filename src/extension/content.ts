@@ -13,6 +13,14 @@ import { startRangePicker } from './range-picker';
 
 const STATUS_ID = 'chatrange-status';
 
+const CAPTURE_UI_ATTRIBUTES = [
+  'data-chatrange-highlighted',
+  'data-chatrange-picker-hover',
+  'data-chatrange-picker-start',
+  'data-chatrange-picker-end',
+  'data-chatrange-picker-range',
+];
+
 function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   document.getElementById(STATUS_ID)?.remove();
 
@@ -104,20 +112,31 @@ function isRangeFullyVisible(rectangle: DOMRect): boolean {
 function clearCaptureUi(): void {
   document.getElementById(STATUS_ID)?.remove();
 
-  const attributes = [
-    'data-chatrange-picker-hover',
-    'data-chatrange-picker-start',
-    'data-chatrange-picker-end',
-    'data-chatrange-picker-range',
-  ];
+  document.documentElement.removeAttribute('data-chatrange-picker-active');
 
-  for (const attribute of attributes) {
+  for (const attribute of CAPTURE_UI_ATTRIBUTES) {
     const elements = document.querySelectorAll<HTMLElement>(`[${attribute}]`);
 
     for (const element of elements) {
       element.removeAttribute(attribute);
+
+      element.style.removeProperty('outline');
+
+      element.style.removeProperty('outline-offset');
+
+      element.style.removeProperty('box-shadow');
+
+      element.style.removeProperty('background-color');
     }
   }
+}
+
+async function waitForCleanPaint(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function isCaptureFailure(result: CaptureResult): result is CaptureFailure {
@@ -141,12 +160,7 @@ async function captureRange(range: SelectedRange): Promise<void> {
   }
 
   clearCaptureUi();
-
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
+  await waitForCleanPaint();
 
   const request: CaptureVisibleRangeRequest = {
     type: 'capture-visible-range',
@@ -173,8 +187,10 @@ async function captureRange(range: SelectedRange): Promise<void> {
   }
 
   if (isCaptureSuccess(result)) {
-    console.info('ChatRange: full viewport captured.', {
+    console.info('ChatRange: selected range captured.', {
       requestId: result.requestId,
+      width: result.width,
+      height: result.height,
     });
   }
 }
@@ -192,6 +208,7 @@ function handleReadyRange(range: SelectedRange): void {
 function run(): void {
   if (!chatGptAdapter.isSupportedPage()) {
     showStatus('ChatRange: unsupported page.', 'error');
+
     return;
   }
 
@@ -199,6 +216,7 @@ function run(): void {
 
   if (initialTurns.length === 0) {
     showStatus('ChatRange: no mounted conversation turns found.', 'error');
+
     return;
   }
 
