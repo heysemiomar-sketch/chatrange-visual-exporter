@@ -25,8 +25,30 @@ export interface CaptureCancellationSession {
   dispose(): void;
 }
 
+export interface CaptureCancellationEventTarget {
+  addEventListener(
+    type: string,
+    listener: EventListener,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+
+  removeEventListener(
+    type: string,
+    listener: EventListener,
+    options?: boolean | EventListenerOptions,
+  ): void;
+}
+
+interface KeyboardLikeEvent extends Event {
+  key: string;
+}
+
+function isKeyboardLikeEvent(event: Event): event is KeyboardLikeEvent {
+  return 'key' in event && typeof event.key === 'string';
+}
+
 export function createCaptureCancellationSession(
-  target: Window = window,
+  target: CaptureCancellationEventTarget = window,
 ): CaptureCancellationSession {
   const controller = new AbortController();
 
@@ -36,8 +58,8 @@ export function createCaptureCancellationSession(
     }
   }
 
-  function handleKeyDown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') {
+  const handleKeyDown: EventListener = (event): void => {
+    if (!isKeyboardLikeEvent(event) || event.key !== 'Escape') {
       return;
     }
 
@@ -45,7 +67,7 @@ export function createCaptureCancellationSession(
     event.stopPropagation();
 
     cancel();
-  }
+  };
 
   target.addEventListener('keydown', handleKeyDown, {
     capture: true,
