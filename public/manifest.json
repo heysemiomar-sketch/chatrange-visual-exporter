@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
   "name": "ChatRange Visual Exporter",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Select and export visual ranges from AI conversations.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage", "offscreen"],
   "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
   "background": {
     "service_worker": "assets/background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Highlight a ChatGPT message"
+    "default_title": "Select and capture a ChatGPT range"
   }
 }
