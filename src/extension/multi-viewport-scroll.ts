@@ -1,10 +1,8 @@
 import type { ConversationTurn } from '../adapters/base';
 
-import {
-  DEFAULT_TARGET_OVERLAP_CSS_PX,
-  MAXIMUM_VIEWPORT_SEGMENTS,
-  MINIMUM_SCROLL_MOVEMENT_CSS_PX,
-} from '../core/multi-viewport-capture';
+const DEFAULT_TARGET_OVERLAP_CSS_PX = 120;
+const MINIMUM_SCROLL_MOVEMENT_CSS_PX = 8;
+const MAXIMUM_VIEWPORT_SEGMENTS = 20;
 
 export interface ScrollContainerMetrics {
   element: HTMLElement;

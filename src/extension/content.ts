@@ -7,7 +7,9 @@ import type {
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
-import { runMultiViewportDryRun } from './multi-viewport-dry-run';
+import { composeMultiViewportCapture } from './multi-viewport-compose';
+
+import { captureMultiViewportSegments } from './multi-viewport-segment-capture';
 
 import type { RangePickerSession, SelectedRange } from './range-picker';
 
@@ -76,7 +78,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
     top: '20px',
     right: '20px',
     zIndex: '2147483647',
-    maxWidth: '460px',
+    maxWidth: '480px',
     padding: '12px 16px',
     borderRadius: '8px',
     backgroundColor: backgroundColors[type],
@@ -94,7 +96,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   if (type !== 'info') {
     window.setTimeout(() => {
       status.remove();
-    }, 6000);
+    }, 7000);
   }
 }
 
@@ -167,10 +169,12 @@ function clearCaptureUi(): void {
   }
 }
 
-async function waitForCleanPaint(): Promise<void> {
-  await new Promise<void>((resolve) => {
+function waitForCleanPaint(): Promise<void> {
+  return new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => resolve());
+      requestAnimationFrame(() => {
+        resolve();
+      });
     });
   });
 }
@@ -198,9 +202,7 @@ async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Pr
   const result = (await chrome.runtime.sendMessage(request)) as CaptureResult;
 
   if (isCaptureFailure(result)) {
-    showStatus(`ChatRange: ${result.message}`, 'error');
-
-    return;
+    throw new Error(result.message);
   }
 
   if (isCaptureSuccess(result)) {
@@ -215,34 +217,49 @@ async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Pr
   }
 }
 
-async function runLongRangeDryRun(range: SelectedRange): Promise<void> {
+async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
   clearCaptureUi();
   await waitForCleanPaint();
 
-  showStatus('ChatRange: testing multi-viewport scrolling...', 'info');
+  showStatus('ChatRange: capturing multi-viewport segments...', 'info');
 
-  const result = await runMultiViewportDryRun(range.turns, {
-    onProgress(completedSteps, totalSteps): void {
+  const segmentCapture = await captureMultiViewportSegments(range.turns, {
+    onProgress(completedSegments, totalSegments): void {
       showStatus(
-        `ChatRange: testing scroll position ` + `${completedSteps} of ${totalSteps}.`,
+        `ChatRange: captured segment ` + `${completedSegments} of ${totalSegments}.`,
         'info',
       );
     },
   });
 
-  console.info('ChatRange: multi-viewport dry run completed.', {
-    plannedPositionCount: result.plannedPositionCount,
-    completedPositionCount: result.completedPositionCount,
-    targetOverlapCssPx: result.targetOverlapCssPx,
-    stepCssPx: result.stepCssPx,
-    originalScrollTopCssPx: result.originalScrollTopCssPx,
-    restoredScrollTopCssPx: result.restoredScrollTopCssPx,
-    steps: result.steps,
+  showStatus(
+    `ChatRange: composing ` + `${segmentCapture.capturedSegmentCount} segment(s)...`,
+    'info',
+  );
+
+  const composition = await composeMultiViewportCapture(segmentCapture);
+
+  console.info('ChatRange: multi-viewport capture composed.', {
+    sessionId: composition.sessionId,
+    captureId: composition.captureId,
+    segmentCount: composition.segmentCount,
+    width: composition.width,
+    height: composition.height,
+    expiresAt: composition.expiresAt,
+    originalScrollTopCssPx: segmentCapture.originalScrollTopCssPx,
+    restoredScrollTopCssPx: segmentCapture.restoredScrollTopCssPx,
   });
 
+  /*
+   * Remove large Data URL references after
+   * composition has completed.
+   */
+  segmentCapture.segments.length = 0;
+
   showStatus(
-    `ChatRange: multi-viewport scroll test completed. ` +
-      `${result.completedPositionCount} position(s) visited.`,
+    `ChatRange: composed ${composition.segmentCount} ` +
+      `segment(s) into a ${composition.width} × ` +
+      `${composition.height} PNG.`,
     'success',
   );
 }
@@ -258,13 +275,13 @@ async function processReadyRange(range: SelectedRange): Promise<void> {
     return;
   }
 
-  await runLongRangeDryRun(range);
+  await captureAndComposeLongRange(range);
 }
 
 function handleReadyRange(range: SelectedRange): void {
   void processReadyRange(range).catch((error: unknown) => {
     const message =
-      error instanceof Error ? error.message : 'Unknown multi-viewport scroll failure.';
+      error instanceof Error ? error.message : 'Unknown multi-viewport capture failure.';
 
     console.error('ChatRange: range processing failed.', error);
 
