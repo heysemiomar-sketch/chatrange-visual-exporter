@@ -7,6 +7,10 @@ import type {
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
+import { composeMultiViewportCapture } from './multi-viewport-compose';
+
+import { captureMultiViewportSegments } from './multi-viewport-segment-capture';
+
 import type { RangePickerSession, SelectedRange } from './range-picker';
 
 import { startRangePicker } from './range-picker';
@@ -74,7 +78,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
     top: '20px',
     right: '20px',
     zIndex: '2147483647',
-    maxWidth: '420px',
+    maxWidth: '480px',
     padding: '12px 16px',
     borderRadius: '8px',
     backgroundColor: backgroundColors[type],
@@ -92,7 +96,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   if (type !== 'info') {
     window.setTimeout(() => {
       status.remove();
-    }, 5000);
+    }, 7000);
   }
 }
 
@@ -153,34 +157,29 @@ function clearCaptureUi(): void {
 
     for (const element of elements) {
       element.removeAttribute(attribute);
+
       element.style.removeProperty('outline');
+
       element.style.removeProperty('outline-offset');
+
       element.style.removeProperty('box-shadow');
+
       element.style.removeProperty('background-color');
     }
   }
 }
 
-async function waitForCleanPaint(): Promise<void> {
-  await new Promise<void>((resolve) => {
+function waitForCleanPaint(): Promise<void> {
+  return new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => resolve());
+      requestAnimationFrame(() => {
+        resolve();
+      });
     });
   });
 }
 
-async function captureRange(range: SelectedRange): Promise<void> {
-  const rectangle = getRangeRectangle(range);
-
-  if (!isRangeFullyVisible(rectangle)) {
-    showStatus(
-      'ChatRange: the selected range must be fully visible for this capture milestone.',
-      'error',
-    );
-
-    return;
-  }
-
+async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Promise<void> {
   clearCaptureUi();
   await waitForCleanPaint();
 
@@ -203,15 +202,14 @@ async function captureRange(range: SelectedRange): Promise<void> {
   const result = (await chrome.runtime.sendMessage(request)) as CaptureResult;
 
   if (isCaptureFailure(result)) {
-    showStatus(`ChatRange: ${result.message}`, 'error');
-
-    return;
+    throw new Error(result.message);
   }
 
   if (isCaptureSuccess(result)) {
     console.info('ChatRange: selected range stored.', {
       requestId: result.requestId,
       captureId: result.captureId,
+      selectedTurnCount: range.turns.length,
       width: result.width,
       height: result.height,
       expiresAt: result.expiresAt,
@@ -219,13 +217,75 @@ async function captureRange(range: SelectedRange): Promise<void> {
   }
 }
 
+async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
+  clearCaptureUi();
+  await waitForCleanPaint();
+
+  showStatus('ChatRange: capturing multi-viewport segments...', 'info');
+
+  const segmentCapture = await captureMultiViewportSegments(range.turns, {
+    onProgress(completedSegments, totalSegments): void {
+      showStatus(
+        `ChatRange: captured segment ` + `${completedSegments} of ${totalSegments}.`,
+        'info',
+      );
+    },
+  });
+
+  showStatus(
+    `ChatRange: composing ` + `${segmentCapture.capturedSegmentCount} segment(s)...`,
+    'info',
+  );
+
+  const composition = await composeMultiViewportCapture(segmentCapture);
+
+  console.info('ChatRange: multi-viewport capture composed.', {
+    sessionId: composition.sessionId,
+    captureId: composition.captureId,
+    segmentCount: composition.segmentCount,
+    width: composition.width,
+    height: composition.height,
+    expiresAt: composition.expiresAt,
+    originalScrollTopCssPx: segmentCapture.originalScrollTopCssPx,
+    restoredScrollTopCssPx: segmentCapture.restoredScrollTopCssPx,
+  });
+
+  /*
+   * Remove large Data URL references after
+   * composition has completed.
+   */
+  segmentCapture.segments.length = 0;
+
+  showStatus(
+    `ChatRange: composed ${composition.segmentCount} ` +
+      `segment(s) into a ${composition.width} × ` +
+      `${composition.height} PNG.`,
+    'success',
+  );
+}
+
+async function processReadyRange(range: SelectedRange): Promise<void> {
+  const rectangle = getRangeRectangle(range);
+
+  if (isRangeFullyVisible(rectangle)) {
+    showStatus(`ChatRange: capturing ${range.turns.length} visible turn(s).`, 'success');
+
+    await captureVisibleRange(range, rectangle);
+
+    return;
+  }
+
+  await captureAndComposeLongRange(range);
+}
+
 function handleReadyRange(range: SelectedRange): void {
-  showStatus(`ChatRange: capturing ${range.turns.length} mounted turn(s).`, 'success');
+  void processReadyRange(range).catch((error: unknown) => {
+    const message =
+      error instanceof Error ? error.message : 'Unknown multi-viewport capture failure.';
 
-  void captureRange(range).catch((error: unknown) => {
-    console.error('ChatRange: capture request failed.', error);
+    console.error('ChatRange: range processing failed.', error);
 
-    showStatus('ChatRange: capture request failed.', 'error');
+    showStatus(`ChatRange: ${message}`, 'error');
   });
 }
 
@@ -246,6 +306,7 @@ function run(): void {
 
   startRangePicker(() => chatGptAdapter.findConversationTurns(), {
     onStateChange: describeSelectionState,
+
     onRangeReady: handleReadyRange,
 
     onCancel(): void {

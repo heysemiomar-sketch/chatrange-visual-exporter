@@ -2,12 +2,17 @@ import type {
   CaptureFailure,
   CaptureResult,
   CaptureVisibleRangeRequest,
+  CaptureVisibleSegmentRequest,
+  CaptureVisibleSegmentSuccess,
+  ComposeMultiViewportCaptureRequest,
   ProcessVisibleCaptureRequest,
-  ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
 import {
   isCaptureVisibleRangeRequest,
+  isCaptureVisibleSegmentRequest,
+  isComposeMultiViewportCaptureRequest,
+  isComposeMultiViewportCaptureSuccess,
   isProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
@@ -65,7 +70,7 @@ async function ensureOffscreenDocument(): Promise<void> {
       .createDocument({
         url: OFFSCREEN_DOCUMENT_PATH,
         reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Crop and store a visible-tab screenshot as a PNG Blob.',
+        justification: 'Crop, compose, and store conversation screenshots as PNG Blobs.',
       })
       .finally(() => {
         creatingOffscreenDocument = null;
@@ -75,7 +80,131 @@ async function ensureOffscreenDocument(): Promise<void> {
   await creatingOffscreenDocument;
 }
 
-async function processScreenshot(
+const CAPTURE_INTERVAL_MILLISECONDS = 1_100;
+
+const CAPTURE_QUOTA_RETRY_MILLISECONDS = 2_000;
+
+const MAXIMUM_CAPTURE_ATTEMPTS = 4;
+
+let captureQueue: Promise<void> = Promise.resolve();
+
+let lastCaptureStartedAt = 0;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function isCaptureQuotaError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes('MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND')
+  );
+}
+
+async function waitForCaptureSlot(): Promise<void> {
+  const elapsedMilliseconds = Date.now() - lastCaptureStartedAt;
+
+  const remainingDelay = CAPTURE_INTERVAL_MILLISECONDS - elapsedMilliseconds;
+
+  if (remainingDelay > 0) {
+    await delay(remainingDelay);
+  }
+}
+
+async function captureVisibleTabWithRetry(windowId: number): Promise<string> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= MAXIMUM_CAPTURE_ATTEMPTS; attempt += 1) {
+    await waitForCaptureSlot();
+
+    lastCaptureStartedAt = Date.now();
+
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, {
+        format: 'png',
+      });
+    } catch (error: unknown) {
+      lastError = error;
+
+      const canRetry = isCaptureQuotaError(error) && attempt < MAXIMUM_CAPTURE_ATTEMPTS;
+
+      if (!canRetry) {
+        throw error;
+      }
+
+      const retryDelay = CAPTURE_QUOTA_RETRY_MILLISECONDS * attempt;
+
+      console.warn('ChatRange: capture quota reached; retrying after backoff.', {
+        attempt,
+        maximumAttempts: MAXIMUM_CAPTURE_ATTEMPTS,
+        retryAfterMilliseconds: retryDelay,
+      });
+
+      await delay(retryDelay);
+
+      lastCaptureStartedAt = 0;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Visible-tab capture exhausted all retry attempts.');
+}
+
+async function captureVisibleTab(windowId: number): Promise<string> {
+  const previousCapture = captureQueue;
+
+  let releaseQueue: (() => void) | undefined;
+
+  captureQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  await previousCapture.catch(() => undefined);
+
+  try {
+    return await captureVisibleTabWithRetry(windowId);
+  } finally {
+    releaseQueue?.();
+  }
+}
+
+async function readImageDimensions(screenshotDataUrl: string): Promise<{
+  width: number;
+  height: number;
+}> {
+  const response = await fetch(screenshotDataUrl);
+
+  if (!response.ok) {
+    throw new Error('The visible-tab screenshot could not be decoded.');
+  }
+
+  const blob = await response.blob();
+
+  const imageBitmap = await createImageBitmap(blob);
+
+  try {
+    return {
+      width: imageBitmap.width,
+      height: imageBitmap.height,
+    };
+  } finally {
+    imageBitmap.close();
+  }
+}
+
+async function openPreview(captureId: string): Promise<void> {
+  const previewUrl = new URL(chrome.runtime.getURL('preview.html'));
+
+  previewUrl.searchParams.set('captureId', captureId);
+
+  await chrome.tabs.create({
+    url: previewUrl.toString(),
+  });
+}
+
+async function processVisibleScreenshot(
   request: CaptureVisibleRangeRequest,
   screenshotDataUrl: string,
 ): Promise<CaptureResult> {
@@ -92,42 +221,108 @@ async function processScreenshot(
   return (await chrome.runtime.sendMessage(processRequest)) as CaptureResult;
 }
 
-async function openPreview(result: ProcessVisibleCaptureSuccess): Promise<void> {
-  const previewUrl = new URL(chrome.runtime.getURL('preview.html'));
-
-  previewUrl.searchParams.set('captureId', result.captureId);
-
-  await chrome.tabs.create({
-    url: previewUrl.toString(),
-  });
-}
-
-async function handleVisibleCapture(
+async function handleVisibleRangeCapture(
   request: CaptureVisibleRangeRequest,
   windowId: number,
 ): Promise<CaptureResult> {
   try {
-    const screenshotDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
-      format: 'png',
-    });
+    const screenshotDataUrl = await captureVisibleTab(windowId);
 
-    const result = await processScreenshot(request, screenshotDataUrl);
+    const result = await processVisibleScreenshot(request, screenshotDataUrl);
 
     if (isProcessVisibleCaptureSuccess(result)) {
-      await openPreview(result);
+      await openPreview(result.captureId);
     }
 
     return result;
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown capture failure.';
+    const message =
+      error instanceof Error ? error.message : 'Unknown visible-range capture failure.';
 
-    console.error('ChatRange: visible capture failed.', {
+    console.error('ChatRange: visible-range capture failed.', {
       requestId: request.requestId,
       message,
     });
 
     return createFailure(request.requestId, 'CAPTURE_FAILED', message);
   }
+}
+
+async function handleVisibleSegmentCapture(
+  request: CaptureVisibleSegmentRequest,
+  windowId: number,
+): Promise<CaptureVisibleSegmentSuccess | CaptureFailure> {
+  try {
+    const screenshotDataUrl = await captureVisibleTab(windowId);
+
+    const dimensions = await readImageDimensions(screenshotDataUrl);
+
+    return {
+      type: 'capture-visible-segment-success',
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      segmentIndex: request.segmentIndex,
+      scrollTopCssPx: request.scrollTopCssPx,
+      overlapWithPreviousCssPx: request.overlapWithPreviousCssPx,
+      screenshotDataUrl,
+      imageWidthPhysicalPx: dimensions.width,
+      imageHeightPhysicalPx: dimensions.height,
+      capturedAt: Date.now(),
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown viewport-segment capture failure.';
+
+    console.error('ChatRange: viewport-segment capture failed.', {
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      segmentIndex: request.segmentIndex,
+      message,
+    });
+
+    return createFailure(request.requestId, 'SEGMENT_CAPTURE_FAILED', message);
+  }
+}
+
+async function handleComposition(
+  request: ComposeMultiViewportCaptureRequest,
+): Promise<CaptureResult> {
+  try {
+    await ensureOffscreenDocument();
+
+    const result = (await chrome.runtime.sendMessage(request)) as CaptureResult;
+
+    if (isComposeMultiViewportCaptureSuccess(result)) {
+      await openPreview(result.captureId);
+    }
+
+    return result;
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown multi-viewport composition failure.';
+
+    console.error('ChatRange: multi-viewport composition forwarding failed.', {
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      segmentCount: request.segments.length,
+      message,
+    });
+
+    return createFailure(request.requestId, 'COMPOSITION_FAILED', message);
+  }
+}
+
+function getSenderWindowId(sender: chrome.runtime.MessageSender): number | undefined {
+  return sender.tab?.windowId;
+}
+
+function sendMissingWindowFailure(
+  requestId: string,
+  sendResponse: (response?: unknown) => void,
+): void {
+  sendResponse(
+    createFailure(requestId, 'CAPTURE_FAILED', 'The sender tab does not have a window ID.'),
+  );
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -154,32 +349,47 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (!isCaptureVisibleRangeRequest(message)) {
-    return false;
+  const windowId = getSenderWindowId(sender);
+
+  if (isCaptureVisibleRangeRequest(message)) {
+    if (windowId === undefined) {
+      sendMissingWindowFailure(message.requestId, sendResponse);
+
+      return false;
+    }
+
+    void handleVisibleRangeCapture(message, windowId).then(sendResponse);
+
+    return true;
   }
 
-  const windowId = sender.tab?.windowId;
+  if (isCaptureVisibleSegmentRequest(message)) {
+    if (windowId === undefined) {
+      sendMissingWindowFailure(message.requestId, sendResponse);
 
-  if (windowId === undefined) {
-    sendResponse(
-      createFailure(
-        message.requestId,
-        'CAPTURE_FAILED',
-        'The sender tab does not have a window ID.',
-      ),
-    );
+      return false;
+    }
 
-    return false;
+    void handleVisibleSegmentCapture(message, windowId).then(sendResponse);
+
+    return true;
   }
 
-  void handleVisibleCapture(message, windowId)
-    .then(sendResponse)
-    .catch((error: unknown) => {
-      const failureMessage =
-        error instanceof Error ? error.message : 'Unexpected background capture failure.';
+  if (isComposeMultiViewportCaptureRequest(message)) {
+    /*
+     * Ignore the forwarded runtime message.
+     * Only the original request from a tab
+     * should be forwarded to the offscreen
+     * document.
+     */
+    if (sender.tab === undefined) {
+      return false;
+    }
 
-      sendResponse(createFailure(message.requestId, 'CAPTURE_FAILED', failureMessage));
-    });
+    void handleComposition(message).then(sendResponse);
 
-  return true;
+    return true;
+  }
+
+  return false;
 });
