@@ -21,6 +21,40 @@ const CAPTURE_UI_ATTRIBUTES = [
   'data-chatrange-picker-range',
 ];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isCaptureFailure(value: unknown): value is CaptureFailure {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.type === 'capture-failure' &&
+    typeof value.requestId === 'string' &&
+    typeof value.code === 'string' &&
+    typeof value.message === 'string'
+  );
+}
+
+function isCaptureSuccess(value: unknown): value is ProcessVisibleCaptureSuccess {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.type === 'process-visible-capture-success' &&
+    typeof value.requestId === 'string' &&
+    typeof value.captureId === 'string' &&
+    typeof value.width === 'number' &&
+    typeof value.height === 'number' &&
+    value.mimeType === 'image/png' &&
+    typeof value.createdAt === 'number' &&
+    typeof value.expiresAt === 'number'
+  );
+}
+
 function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   document.getElementById(STATUS_ID)?.remove();
 
@@ -119,13 +153,9 @@ function clearCaptureUi(): void {
 
     for (const element of elements) {
       element.removeAttribute(attribute);
-
       element.style.removeProperty('outline');
-
       element.style.removeProperty('outline-offset');
-
       element.style.removeProperty('box-shadow');
-
       element.style.removeProperty('background-color');
     }
   }
@@ -137,14 +167,6 @@ async function waitForCleanPaint(): Promise<void> {
       requestAnimationFrame(() => resolve());
     });
   });
-}
-
-function isCaptureFailure(result: CaptureResult): result is CaptureFailure {
-  return result.type === 'capture-failure';
-}
-
-function isCaptureSuccess(result: CaptureResult): result is ProcessVisibleCaptureSuccess {
-  return result.type === 'process-visible-capture-success';
 }
 
 async function captureRange(range: SelectedRange): Promise<void> {
@@ -187,10 +209,12 @@ async function captureRange(range: SelectedRange): Promise<void> {
   }
 
   if (isCaptureSuccess(result)) {
-    console.info('ChatRange: selected range captured.', {
+    console.info('ChatRange: selected range stored.', {
       requestId: result.requestId,
+      captureId: result.captureId,
       width: result.width,
       height: result.height,
+      expiresAt: result.expiresAt,
     });
   }
 }
@@ -222,7 +246,6 @@ function run(): void {
 
   startRangePicker(() => chatGptAdapter.findConversationTurns(), {
     onStateChange: describeSelectionState,
-
     onRangeReady: handleReadyRange,
 
     onCancel(): void {

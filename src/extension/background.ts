@@ -6,11 +6,12 @@ import type {
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
-import { isCaptureVisibleRangeRequest } from '../core/capture-messages';
+import {
+  isCaptureVisibleRangeRequest,
+  isProcessVisibleCaptureSuccess,
+} from '../core/capture-messages';
 
 const SUPPORTED_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
-
-const PREVIEW_STORAGE_KEY = 'chatrange-preview-capture';
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
 
@@ -23,6 +24,7 @@ function isSupportedUrl(urlString: string | undefined): boolean {
 
   try {
     const url = new URL(urlString);
+
     return SUPPORTED_HOSTS.has(url.hostname);
   } catch {
     return false;
@@ -40,10 +42,6 @@ function createFailure(
     code,
     message,
   };
-}
-
-function isCaptureSuccess(result: CaptureResult): result is ProcessVisibleCaptureSuccess {
-  return result.type === 'process-visible-capture-success';
 }
 
 async function hasOffscreenDocument(): Promise<boolean> {
@@ -67,7 +65,7 @@ async function ensureOffscreenDocument(): Promise<void> {
       .createDocument({
         url: OFFSCREEN_DOCUMENT_PATH,
         reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Crop a visible-tab screenshot into the selected conversation range.',
+        justification: 'Crop and store a visible-tab screenshot as a PNG Blob.',
       })
       .finally(() => {
         creatingOffscreenDocument = null;
@@ -94,13 +92,13 @@ async function processScreenshot(
   return (await chrome.runtime.sendMessage(processRequest)) as CaptureResult;
 }
 
-async function storeAndOpenPreview(result: ProcessVisibleCaptureSuccess): Promise<void> {
-  await chrome.storage.local.set({
-    [PREVIEW_STORAGE_KEY]: result,
-  });
+async function openPreview(result: ProcessVisibleCaptureSuccess): Promise<void> {
+  const previewUrl = new URL(chrome.runtime.getURL('preview.html'));
+
+  previewUrl.searchParams.set('captureId', result.captureId);
 
   await chrome.tabs.create({
-    url: chrome.runtime.getURL('preview.html'),
+    url: previewUrl.toString(),
   });
 }
 
@@ -115,8 +113,8 @@ async function handleVisibleCapture(
 
     const result = await processScreenshot(request, screenshotDataUrl);
 
-    if (isCaptureSuccess(result)) {
-      await storeAndOpenPreview(result);
+    if (isProcessVisibleCaptureSuccess(result)) {
+      await openPreview(result);
     }
 
     return result;
@@ -139,6 +137,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id === undefined || !isSupportedUrl(tab.url)) {
     console.warn('ChatRange: open a supported ChatGPT conversation first.');
+
     return;
   }
 
