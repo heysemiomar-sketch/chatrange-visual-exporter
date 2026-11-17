@@ -7,6 +7,8 @@ import type {
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
+import { runMultiViewportDryRun } from './multi-viewport-dry-run';
+
 import type { RangePickerSession, SelectedRange } from './range-picker';
 
 import { startRangePicker } from './range-picker';
@@ -74,7 +76,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
     top: '20px',
     right: '20px',
     zIndex: '2147483647',
-    maxWidth: '420px',
+    maxWidth: '460px',
     padding: '12px 16px',
     borderRadius: '8px',
     backgroundColor: backgroundColors[type],
@@ -92,7 +94,7 @@ function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   if (type !== 'info') {
     window.setTimeout(() => {
       status.remove();
-    }, 5000);
+    }, 6000);
   }
 }
 
@@ -153,9 +155,13 @@ function clearCaptureUi(): void {
 
     for (const element of elements) {
       element.removeAttribute(attribute);
+
       element.style.removeProperty('outline');
+
       element.style.removeProperty('outline-offset');
+
       element.style.removeProperty('box-shadow');
+
       element.style.removeProperty('background-color');
     }
   }
@@ -169,18 +175,7 @@ async function waitForCleanPaint(): Promise<void> {
   });
 }
 
-async function captureRange(range: SelectedRange): Promise<void> {
-  const rectangle = getRangeRectangle(range);
-
-  if (!isRangeFullyVisible(rectangle)) {
-    showStatus(
-      'ChatRange: the selected range must be fully visible for this capture milestone.',
-      'error',
-    );
-
-    return;
-  }
-
+async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Promise<void> {
   clearCaptureUi();
   await waitForCleanPaint();
 
@@ -212,6 +207,7 @@ async function captureRange(range: SelectedRange): Promise<void> {
     console.info('ChatRange: selected range stored.', {
       requestId: result.requestId,
       captureId: result.captureId,
+      selectedTurnCount: range.turns.length,
       width: result.width,
       height: result.height,
       expiresAt: result.expiresAt,
@@ -219,13 +215,60 @@ async function captureRange(range: SelectedRange): Promise<void> {
   }
 }
 
+async function runLongRangeDryRun(range: SelectedRange): Promise<void> {
+  clearCaptureUi();
+  await waitForCleanPaint();
+
+  showStatus('ChatRange: testing multi-viewport scrolling...', 'info');
+
+  const result = await runMultiViewportDryRun(range.turns, {
+    onProgress(completedSteps, totalSteps): void {
+      showStatus(
+        `ChatRange: testing scroll position ` + `${completedSteps} of ${totalSteps}.`,
+        'info',
+      );
+    },
+  });
+
+  console.info('ChatRange: multi-viewport dry run completed.', {
+    plannedPositionCount: result.plannedPositionCount,
+    completedPositionCount: result.completedPositionCount,
+    targetOverlapCssPx: result.targetOverlapCssPx,
+    stepCssPx: result.stepCssPx,
+    originalScrollTopCssPx: result.originalScrollTopCssPx,
+    restoredScrollTopCssPx: result.restoredScrollTopCssPx,
+    steps: result.steps,
+  });
+
+  showStatus(
+    `ChatRange: multi-viewport scroll test completed. ` +
+      `${result.completedPositionCount} position(s) visited.`,
+    'success',
+  );
+}
+
+async function processReadyRange(range: SelectedRange): Promise<void> {
+  const rectangle = getRangeRectangle(range);
+
+  if (isRangeFullyVisible(rectangle)) {
+    showStatus(`ChatRange: capturing ${range.turns.length} visible turn(s).`, 'success');
+
+    await captureVisibleRange(range, rectangle);
+
+    return;
+  }
+
+  await runLongRangeDryRun(range);
+}
+
 function handleReadyRange(range: SelectedRange): void {
-  showStatus(`ChatRange: capturing ${range.turns.length} mounted turn(s).`, 'success');
+  void processReadyRange(range).catch((error: unknown) => {
+    const message =
+      error instanceof Error ? error.message : 'Unknown multi-viewport scroll failure.';
 
-  void captureRange(range).catch((error: unknown) => {
-    console.error('ChatRange: capture request failed.', error);
+    console.error('ChatRange: range processing failed.', error);
 
-    showStatus('ChatRange: capture request failed.', 'error');
+    showStatus(`ChatRange: ${message}`, 'error');
   });
 }
 
@@ -246,6 +289,7 @@ function run(): void {
 
   startRangePicker(() => chatGptAdapter.findConversationTurns(), {
     onStateChange: describeSelectionState,
+
     onRangeReady: handleReadyRange,
 
     onCancel(): void {
