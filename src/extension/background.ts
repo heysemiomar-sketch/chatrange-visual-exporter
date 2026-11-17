@@ -2,12 +2,15 @@ import type {
   CaptureFailure,
   CaptureResult,
   CaptureVisibleRangeRequest,
+  CaptureVisibleSegmentRequest,
+  CaptureVisibleSegmentSuccess,
   ProcessVisibleCaptureRequest,
   ProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
 import {
   isCaptureVisibleRangeRequest,
+  isCaptureVisibleSegmentRequest,
   isProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
@@ -65,7 +68,7 @@ async function ensureOffscreenDocument(): Promise<void> {
       .createDocument({
         url: OFFSCREEN_DOCUMENT_PATH,
         reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Crop and store a visible-tab screenshot as a PNG Blob.',
+        justification: 'Crop and store visible-tab screenshots as PNG Blobs.',
       })
       .finally(() => {
         creatingOffscreenDocument = null;
@@ -73,6 +76,36 @@ async function ensureOffscreenDocument(): Promise<void> {
   }
 
   await creatingOffscreenDocument;
+}
+
+async function captureVisibleTab(windowId: number): Promise<string> {
+  return await chrome.tabs.captureVisibleTab(windowId, {
+    format: 'png',
+  });
+}
+
+async function readImageDimensions(screenshotDataUrl: string): Promise<{
+  width: number;
+  height: number;
+}> {
+  const response = await fetch(screenshotDataUrl);
+
+  if (!response.ok) {
+    throw new Error('The visible-tab screenshot could not be decoded.');
+  }
+
+  const blob = await response.blob();
+
+  const imageBitmap = await createImageBitmap(blob);
+
+  try {
+    return {
+      width: imageBitmap.width,
+      height: imageBitmap.height,
+    };
+  } finally {
+    imageBitmap.close();
+  }
 }
 
 async function processScreenshot(
@@ -102,14 +135,12 @@ async function openPreview(result: ProcessVisibleCaptureSuccess): Promise<void> 
   });
 }
 
-async function handleVisibleCapture(
+async function handleVisibleRangeCapture(
   request: CaptureVisibleRangeRequest,
   windowId: number,
 ): Promise<CaptureResult> {
   try {
-    const screenshotDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
-      format: 'png',
-    });
+    const screenshotDataUrl = await captureVisibleTab(windowId);
 
     const result = await processScreenshot(request, screenshotDataUrl);
 
@@ -119,15 +150,65 @@ async function handleVisibleCapture(
 
     return result;
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown capture failure.';
+    const message =
+      error instanceof Error ? error.message : 'Unknown visible-range capture failure.';
 
-    console.error('ChatRange: visible capture failed.', {
+    console.error('ChatRange: visible-range capture failed.', {
       requestId: request.requestId,
       message,
     });
 
     return createFailure(request.requestId, 'CAPTURE_FAILED', message);
   }
+}
+
+async function handleVisibleSegmentCapture(
+  request: CaptureVisibleSegmentRequest,
+  windowId: number,
+): Promise<CaptureVisibleSegmentSuccess | CaptureFailure> {
+  try {
+    const screenshotDataUrl = await captureVisibleTab(windowId);
+
+    const dimensions = await readImageDimensions(screenshotDataUrl);
+
+    return {
+      type: 'capture-visible-segment-success',
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      segmentIndex: request.segmentIndex,
+      scrollTopCssPx: request.scrollTopCssPx,
+      overlapWithPreviousCssPx: request.overlapWithPreviousCssPx,
+      screenshotDataUrl,
+      imageWidthPhysicalPx: dimensions.width,
+      imageHeightPhysicalPx: dimensions.height,
+      capturedAt: Date.now(),
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown viewport-segment capture failure.';
+
+    console.error('ChatRange: viewport-segment capture failed.', {
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      segmentIndex: request.segmentIndex,
+      message,
+    });
+
+    return createFailure(request.requestId, 'SEGMENT_CAPTURE_FAILED', message);
+  }
+}
+
+function getSenderWindowId(sender: chrome.runtime.MessageSender): number | undefined {
+  return sender.tab?.windowId;
+}
+
+function sendMissingWindowFailure(
+  requestId: string,
+  sendResponse: (response?: unknown) => void,
+): void {
+  sendResponse(
+    createFailure(requestId, 'CAPTURE_FAILED', 'The sender tab does not have a window ID.'),
+  );
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -154,32 +235,45 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
-  if (!isCaptureVisibleRangeRequest(message)) {
-    return false;
+  const windowId = getSenderWindowId(sender);
+
+  if (isCaptureVisibleRangeRequest(message)) {
+    if (windowId === undefined) {
+      sendMissingWindowFailure(message.requestId, sendResponse);
+
+      return false;
+    }
+
+    void handleVisibleRangeCapture(message, windowId)
+      .then(sendResponse)
+      .catch((error: unknown) => {
+        const failureMessage =
+          error instanceof Error ? error.message : 'Unexpected visible-range capture failure.';
+
+        sendResponse(createFailure(message.requestId, 'CAPTURE_FAILED', failureMessage));
+      });
+
+    return true;
   }
 
-  const windowId = sender.tab?.windowId;
+  if (isCaptureVisibleSegmentRequest(message)) {
+    if (windowId === undefined) {
+      sendMissingWindowFailure(message.requestId, sendResponse);
 
-  if (windowId === undefined) {
-    sendResponse(
-      createFailure(
-        message.requestId,
-        'CAPTURE_FAILED',
-        'The sender tab does not have a window ID.',
-      ),
-    );
+      return false;
+    }
 
-    return false;
+    void handleVisibleSegmentCapture(message, windowId)
+      .then(sendResponse)
+      .catch((error: unknown) => {
+        const failureMessage =
+          error instanceof Error ? error.message : 'Unexpected viewport-segment capture failure.';
+
+        sendResponse(createFailure(message.requestId, 'SEGMENT_CAPTURE_FAILED', failureMessage));
+      });
+
+    return true;
   }
 
-  void handleVisibleCapture(message, windowId)
-    .then(sendResponse)
-    .catch((error: unknown) => {
-      const failureMessage =
-        error instanceof Error ? error.message : 'Unexpected background capture failure.';
-
-      sendResponse(createFailure(message.requestId, 'CAPTURE_FAILED', failureMessage));
-    });
-
-  return true;
+  return false;
 });
