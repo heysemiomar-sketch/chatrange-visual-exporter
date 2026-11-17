@@ -5,6 +5,8 @@ import type {
   ComposeViewportSegment,
 } from '../core/capture-messages';
 
+import { throwIfCaptureCancelled } from '../core/capture-cancellation';
+
 import type { MultiViewportSegmentCaptureResult } from './multi-viewport-segment-capture';
 
 export class MultiViewportCompositionError extends Error {
@@ -76,7 +78,10 @@ function createCompositionSegments(
 
 export async function composeMultiViewportCapture(
   capture: MultiViewportSegmentCaptureResult,
+  signal: AbortSignal,
 ): Promise<ComposeMultiViewportCaptureSuccess> {
+  throwIfCaptureCancelled(signal);
+
   if (capture.capturedSegmentCount === 0) {
     throw new MultiViewportCompositionError('No viewport segment is available for composition.');
   }
@@ -95,7 +100,22 @@ export async function composeMultiViewportCapture(
     segments: createCompositionSegments(capture),
   };
 
+  /*
+   * Check immediately before sending the large
+   * collection of Data URLs to the extension.
+   */
+  throwIfCaptureCancelled(signal);
+
   const response = (await chrome.runtime.sendMessage(request)) as unknown;
+
+  /*
+   * Composition inside the offscreen document
+   * cannot currently be interrupted once the
+   * message has been sent. This check prevents
+   * opening or accepting the result if Escape
+   * was pressed while composition was running.
+   */
+  throwIfCaptureCancelled(signal);
 
   if (isCaptureFailure(response)) {
     throw new MultiViewportCompositionError(response.message);
