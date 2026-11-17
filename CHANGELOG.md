@@ -8,6 +8,37 @@ The project follows Semantic Versioning where practical during early development
 
 ### Added
 
+- Escape-based cancellation for long multi-viewport capture sessions
+- Vitest-based automated unit testing
+- Automated tests for overlap conversion, composed-height calculation, scroll validation, session-state transitions, progress calculation, safety limits, and cancellation behavior
+- Programmatic cancellation and Escape-key listener disposal
+
+### Changed
+
+- Long captures now display an instruction to press Escape to cancel
+- Cancellation checks run before and after scrolling, rendering waits, screenshot requests, and composition
+- Concurrent capture sessions are blocked while another capture is active
+
+### Fixed
+
+- Restored the original conversation scroll position after cancellation
+- Restored suppressed ChatGPT interface elements after cancellation
+- Prevented composition and Preview creation after cancellation
+- Released captured segment Data URL references after cancellation or failure
+- Removed the Escape listener after capture completion or cancellation
+
+### Security
+
+- Confirmed zero production dependency vulnerabilities with `npm audit --omit=dev`
+
+### Known limitations
+
+- Cancellation is cooperative and cannot interrupt a `captureVisibleTab()` request already in progress
+- Offscreen composition cannot currently be interrupted after its request has been sent
+- Full `npm audit` can still report advisories in development-only dependencies
+
+### Added
+
 - IndexedDB storage for cropped PNG capture blobs
 - Capture previews addressed by `captureId`
 - Refresh-safe preview loading from persistent Blob storage
