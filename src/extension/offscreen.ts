@@ -8,6 +8,8 @@ import type {
 
 import { isProcessVisibleCaptureRequest } from '../core/capture-messages';
 
+import { deleteExpiredCaptures, saveCapture } from '../core/capture-storage';
+
 interface PhysicalCropRectangle {
   sourceX: number;
   sourceY: number;
@@ -96,31 +98,14 @@ async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.addEventListener('load', () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error('The encoded PNG could not be converted to a Data URL.'));
-    });
-
-    reader.addEventListener('error', () => {
-      reject(reader.error ?? new Error('The PNG Data URL conversion failed.'));
-    });
-
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function cropScreenshot(
+async function cropAndStoreScreenshot(
   request: ProcessVisibleCaptureRequest,
 ): Promise<ProcessVisibleCaptureSuccess> {
   const screenshotResponse = await fetch(request.screenshotDataUrl);
+
+  if (!screenshotResponse.ok) {
+    throw new Error('The visible-tab screenshot could not be decoded.');
+  }
 
   const screenshotBlob = await screenshotResponse.blob();
 
@@ -163,14 +148,24 @@ async function cropScreenshot(
 
     const pngBlob = await canvasToPngBlob(canvas);
 
-    const pngDataUrl = await blobToDataUrl(pngBlob);
+    await deleteExpiredCaptures();
+
+    const storedCapture = await saveCapture({
+      captureId: request.requestId,
+      width: crop.sourceWidth,
+      height: crop.sourceHeight,
+      blob: pngBlob,
+    });
 
     return {
       type: 'process-visible-capture-success',
       requestId: request.requestId,
-      pngDataUrl,
-      width: crop.sourceWidth,
-      height: crop.sourceHeight,
+      captureId: storedCapture.captureId,
+      width: storedCapture.width,
+      height: storedCapture.height,
+      mimeType: storedCapture.mimeType,
+      createdAt: storedCapture.createdAt,
+      expiresAt: storedCapture.expiresAt,
     };
   } finally {
     imageBitmap.close();
@@ -179,10 +174,15 @@ async function cropScreenshot(
 
 async function processRequest(request: ProcessVisibleCaptureRequest): Promise<CaptureResult> {
   try {
-    return await cropScreenshot(request);
+    return await cropAndStoreScreenshot(request);
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : 'Unknown offscreen processing failure.';
+
+    console.error('ChatRange: offscreen capture processing failed.', {
+      requestId: request.requestId,
+      message,
+    });
 
     return createFailure(request.requestId, 'OFFSCREEN_FAILED', message);
   }
@@ -193,7 +193,14 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return false;
   }
 
-  void processRequest(message).then(sendResponse);
+  void processRequest(message)
+    .then(sendResponse)
+    .catch((error: unknown) => {
+      const messageText =
+        error instanceof Error ? error.message : 'Unexpected offscreen processing failure.';
+
+      sendResponse(createFailure(message.requestId, 'OFFSCREEN_FAILED', messageText));
+    });
 
   return true;
 });
