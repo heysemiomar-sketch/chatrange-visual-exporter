@@ -1,16 +1,12 @@
-import type { ConversationTurn, MessageRole } from '../adapters/base';
 import { chatGptAdapter } from '../adapters/chatgpt';
 
-const HIGHLIGHT_ATTRIBUTE = 'data-chatrange-highlighted';
+import type { RangePickerSession, SelectedRange } from './range-picker';
+
+import { startRangePicker } from './range-picker';
 
 const STATUS_ID = 'chatrange-status';
 
-const ROLE_COLORS: Record<MessageRole, string> = {
-  user: '#3b82f6',
-  assistant: '#10a37f',
-};
-
-function showStatus(message: string, type: 'success' | 'error'): void {
+function showStatus(message: string, type: 'info' | 'success' | 'error'): void {
   document.getElementById(STATUS_ID)?.remove();
 
   const status = document.createElement('div');
@@ -18,128 +14,104 @@ function showStatus(message: string, type: 'success' | 'error'): void {
   status.id = STATUS_ID;
   status.textContent = message;
 
+  const backgroundColors = {
+    info: '#1d4ed8',
+    success: '#047857',
+    error: '#b91c1c',
+  };
+
   Object.assign(status.style, {
     position: 'fixed',
     top: '20px',
     right: '20px',
     zIndex: '2147483647',
-    maxWidth: '400px',
+    maxWidth: '420px',
     padding: '12px 16px',
     borderRadius: '8px',
-    backgroundColor: type === 'success' ? '#047857' : '#b91c1c',
+    backgroundColor: backgroundColors[type],
     color: '#ffffff',
     fontFamily: 'system-ui, sans-serif',
     fontSize: '14px',
     fontWeight: '600',
+    lineHeight: '1.5',
     boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+    pointerEvents: 'none',
   });
 
   document.documentElement.appendChild(status);
 
-  window.setTimeout(() => {
-    status.remove();
-  }, 4000);
-}
-
-function clearPreviousHighlight(): void {
-  const highlightedElements = document.querySelectorAll<HTMLElement>(
-    `[${HIGHLIGHT_ATTRIBUTE}="true"]`,
-  );
-
-  for (const element of highlightedElements) {
-    element.style.removeProperty('outline');
-    element.style.removeProperty('outline-offset');
-    element.removeAttribute(HIGHLIGHT_ATTRIBUTE);
+  if (type !== 'info') {
+    window.setTimeout(() => {
+      status.remove();
+    }, 5000);
   }
 }
 
-function intersectsViewport(turn: ConversationTurn): boolean {
-  const rectangle = turn.element.getBoundingClientRect();
+function describeSelectionState(session: RangePickerSession): void {
+  switch (session.state) {
+    case 'selecting-start':
+      showStatus('ChatRange: select the start message. Press Escape to cancel.', 'info');
+      break;
 
-  return (
-    rectangle.width > 0 &&
-    rectangle.height > 0 &&
-    rectangle.bottom > 0 &&
-    rectangle.top < window.innerHeight
-  );
-}
+    case 'selecting-end':
+      showStatus('ChatRange: start selected. Now select the end message.', 'info');
+      break;
 
-function distanceFromViewportCenter(turn: ConversationTurn): number {
-  const rectangle = turn.element.getBoundingClientRect();
+    case 'cancelled':
+      showStatus('ChatRange: range selection cancelled.', 'error');
+      break;
 
-  const elementCenter = rectangle.top + rectangle.height / 2;
-
-  const viewportCenter = window.innerHeight / 2;
-
-  return Math.abs(elementCenter - viewportCenter);
-}
-
-function selectVisibleTurn(turns: ConversationTurn[]): ConversationTurn | undefined {
-  return turns
-    .filter(intersectsViewport)
-    .sort(
-      (first, second) => distanceFromViewportCenter(first) - distanceFromViewportCenter(second),
-    )[0];
-}
-
-function highlightTurn(turn: ConversationTurn): void {
-  const color = ROLE_COLORS[turn.role];
-
-  turn.element.setAttribute(HIGHLIGHT_ATTRIBUTE, 'true');
-
-  turn.element.style.setProperty('outline', `5px solid ${color}`, 'important');
-
-  turn.element.style.setProperty('outline-offset', '5px', 'important');
-
-  turn.element.scrollIntoView({
-    behavior: 'smooth',
-    block: 'center',
-  });
-}
-
-function countRole(turns: ConversationTurn[], role: MessageRole): number {
-  return turns.filter((turn) => turn.role === role).length;
-}
-
-function run(): void {
-  clearPreviousHighlight();
-
-  if (!chatGptAdapter.isSupportedPage()) {
-    showStatus('ChatRange: unsupported page.', 'error');
-    return;
+    case 'range-ready':
+    case 'idle':
+      break;
   }
+}
 
-  const turns = chatGptAdapter.findConversationTurns();
-
-  const target = selectVisibleTurn(turns) ?? turns[0];
-
-  if (!target) {
-    showStatus('ChatRange: no mounted conversation turns found.', 'error');
-    return;
-  }
-
-  highlightTurn(target);
-
-  const userCount = countRole(turns, 'user');
-
-  const assistantCount = countRole(turns, 'assistant');
-
+function describeReadyRange(range: SelectedRange): void {
   showStatus(
-    `ChatRange: ${turns.length} mounted turns ` +
-      `(${userCount} user, ` +
-      `${assistantCount} assistant). ` +
-      `Selected ${target.role} ` +
-      `#${target.logicalIndex}.`,
+    `ChatRange: range ready. ` +
+      `${range.turns.length} mounted turn(s) selected. ` +
+      `Start #${range.start.logicalIndex}, ` +
+      `end #${range.end.logicalIndex}.`,
     'success',
   );
 
-  console.info('ChatRange: selected conversation turn.', {
-    role: target.role,
-    logicalIndex: target.logicalIndex,
-    mountedTurnCount: turns.length,
-    userCount,
-    assistantCount,
-    element: target.element,
+  console.info('ChatRange: selected range.', {
+    startRole: range.start.role,
+    startLogicalIndex: range.start.logicalIndex,
+    endRole: range.end.role,
+    endLogicalIndex: range.end.logicalIndex,
+    selectedTurnCount: range.turns.length,
+  });
+}
+
+function run(): void {
+  if (!chatGptAdapter.isSupportedPage()) {
+    showStatus('ChatRange: unsupported page.', 'error');
+
+    return;
+  }
+
+  const initialTurns = chatGptAdapter.findConversationTurns();
+
+  if (initialTurns.length === 0) {
+    showStatus('ChatRange: no mounted conversation turns found.', 'error');
+
+    return;
+  }
+
+  console.info('ChatRange: starting range picker.', {
+    mountedTurnCount: initialTurns.length,
+  });
+
+  startRangePicker(() => chatGptAdapter.findConversationTurns(), {
+    onStateChange: describeSelectionState,
+
+    onRangeReady: describeReadyRange,
+
+    onCancel(): void {
+      console.info('ChatRange: picker cancelled.');
+    },
   });
 }
 
