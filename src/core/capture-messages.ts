@@ -42,6 +42,24 @@ export interface CaptureVisibleSegmentSuccess {
   capturedAt: number;
 }
 
+export interface ComposeViewportSegment {
+  segmentIndex: number;
+  scrollTopCssPx: number;
+  overlapWithPreviousCssPx: number;
+  screenshotDataUrl: string;
+  crop: CaptureRectangle;
+  viewport: CaptureViewport;
+  imageWidthPhysicalPx: number;
+  imageHeightPhysicalPx: number;
+}
+
+export interface ComposeMultiViewportCaptureRequest {
+  type: 'compose-multi-viewport-capture';
+  requestId: string;
+  sessionId: string;
+  segments: ComposeViewportSegment[];
+}
+
 export interface ProcessVisibleCaptureRequest {
   type: 'process-visible-capture';
   requestId: string;
@@ -54,6 +72,19 @@ export interface ProcessVisibleCaptureSuccess {
   type: 'process-visible-capture-success';
   requestId: string;
   captureId: string;
+  width: number;
+  height: number;
+  mimeType: 'image/png';
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ComposeMultiViewportCaptureSuccess {
+  type: 'compose-multi-viewport-capture-success';
+  requestId: string;
+  sessionId: string;
+  captureId: string;
+  segmentCount: number;
   width: number;
   height: number;
   mimeType: 'image/png';
@@ -79,13 +110,27 @@ export interface CaptureFailure {
 }
 
 export type CaptureRequest =
-  CaptureVisibleRangeRequest | CaptureVisibleSegmentRequest | ProcessVisibleCaptureRequest;
+  | CaptureVisibleRangeRequest
+  | CaptureVisibleSegmentRequest
+  | ProcessVisibleCaptureRequest
+  | ComposeMultiViewportCaptureRequest;
 
 export type CaptureResult =
-  CaptureVisibleSegmentSuccess | ProcessVisibleCaptureSuccess | CaptureFailure;
+  | CaptureVisibleSegmentSuccess
+  | ProcessVisibleCaptureSuccess
+  | ComposeMultiViewportCaptureSuccess
+  | CaptureFailure;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
 }
 
 function isCaptureRectangle(value: unknown): value is CaptureRectangle {
@@ -94,15 +139,11 @@ function isCaptureRectangle(value: unknown): value is CaptureRectangle {
   }
 
   return (
-    typeof value.left === 'number' &&
-    Number.isFinite(value.left) &&
-    typeof value.top === 'number' &&
-    Number.isFinite(value.top) &&
-    typeof value.width === 'number' &&
-    Number.isFinite(value.width) &&
+    isFiniteNumber(value.left) &&
+    isFiniteNumber(value.top) &&
+    isFiniteNumber(value.width) &&
     value.width > 0 &&
-    typeof value.height === 'number' &&
-    Number.isFinite(value.height) &&
+    isFiniteNumber(value.height) &&
     value.height > 0
   );
 }
@@ -113,15 +154,33 @@ function isCaptureViewport(value: unknown): value is CaptureViewport {
   }
 
   return (
-    typeof value.cssWidth === 'number' &&
-    Number.isFinite(value.cssWidth) &&
+    isFiniteNumber(value.cssWidth) &&
     value.cssWidth > 0 &&
-    typeof value.cssHeight === 'number' &&
-    Number.isFinite(value.cssHeight) &&
+    isFiniteNumber(value.cssHeight) &&
     value.cssHeight > 0 &&
-    typeof value.devicePixelRatio === 'number' &&
-    Number.isFinite(value.devicePixelRatio) &&
+    isFiniteNumber(value.devicePixelRatio) &&
     value.devicePixelRatio > 0
+  );
+}
+
+function isComposeViewportSegment(value: unknown): value is ComposeViewportSegment {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isNonNegativeInteger(value.segmentIndex) &&
+    isFiniteNumber(value.scrollTopCssPx) &&
+    isFiniteNumber(value.overlapWithPreviousCssPx) &&
+    value.overlapWithPreviousCssPx >= 0 &&
+    typeof value.screenshotDataUrl === 'string' &&
+    value.screenshotDataUrl.startsWith('data:image/png') &&
+    isCaptureRectangle(value.crop) &&
+    isCaptureViewport(value.viewport) &&
+    isFiniteNumber(value.imageWidthPhysicalPx) &&
+    value.imageWidthPhysicalPx > 0 &&
+    isFiniteNumber(value.imageHeightPhysicalPx) &&
+    value.imageHeightPhysicalPx > 0
   );
 }
 
@@ -151,13 +210,9 @@ export function isCaptureVisibleSegmentRequest(
     message.type === 'capture-visible-segment' &&
     typeof message.requestId === 'string' &&
     typeof message.sessionId === 'string' &&
-    typeof message.segmentIndex === 'number' &&
-    Number.isInteger(message.segmentIndex) &&
-    message.segmentIndex >= 0 &&
-    typeof message.scrollTopCssPx === 'number' &&
-    Number.isFinite(message.scrollTopCssPx) &&
-    typeof message.overlapWithPreviousCssPx === 'number' &&
-    Number.isFinite(message.overlapWithPreviousCssPx) &&
+    isNonNegativeInteger(message.segmentIndex) &&
+    isFiniteNumber(message.scrollTopCssPx) &&
+    isFiniteNumber(message.overlapWithPreviousCssPx) &&
     message.overlapWithPreviousCssPx >= 0 &&
     isCaptureRectangle(message.crop) &&
     isCaptureViewport(message.viewport)
@@ -175,18 +230,33 @@ export function isCaptureVisibleSegmentSuccess(
     message.type === 'capture-visible-segment-success' &&
     typeof message.requestId === 'string' &&
     typeof message.sessionId === 'string' &&
-    typeof message.segmentIndex === 'number' &&
-    Number.isInteger(message.segmentIndex) &&
-    message.segmentIndex >= 0 &&
-    typeof message.scrollTopCssPx === 'number' &&
-    typeof message.overlapWithPreviousCssPx === 'number' &&
+    isNonNegativeInteger(message.segmentIndex) &&
+    isFiniteNumber(message.scrollTopCssPx) &&
+    isFiniteNumber(message.overlapWithPreviousCssPx) &&
     typeof message.screenshotDataUrl === 'string' &&
     message.screenshotDataUrl.startsWith('data:image/png') &&
-    typeof message.imageWidthPhysicalPx === 'number' &&
+    isFiniteNumber(message.imageWidthPhysicalPx) &&
     message.imageWidthPhysicalPx > 0 &&
-    typeof message.imageHeightPhysicalPx === 'number' &&
+    isFiniteNumber(message.imageHeightPhysicalPx) &&
     message.imageHeightPhysicalPx > 0 &&
-    typeof message.capturedAt === 'number'
+    isFiniteNumber(message.capturedAt)
+  );
+}
+
+export function isComposeMultiViewportCaptureRequest(
+  message: unknown,
+): message is ComposeMultiViewportCaptureRequest {
+  if (!isRecord(message)) {
+    return false;
+  }
+
+  return (
+    message.type === 'compose-multi-viewport-capture' &&
+    typeof message.requestId === 'string' &&
+    typeof message.sessionId === 'string' &&
+    Array.isArray(message.segments) &&
+    message.segments.length > 0 &&
+    message.segments.every(isComposeViewportSegment)
   );
 }
 
@@ -217,13 +287,37 @@ export function isProcessVisibleCaptureSuccess(
     message.type === 'process-visible-capture-success' &&
     typeof message.requestId === 'string' &&
     typeof message.captureId === 'string' &&
-    typeof message.width === 'number' &&
+    isFiniteNumber(message.width) &&
     message.width > 0 &&
-    typeof message.height === 'number' &&
+    isFiniteNumber(message.height) &&
     message.height > 0 &&
     message.mimeType === 'image/png' &&
-    typeof message.createdAt === 'number' &&
-    typeof message.expiresAt === 'number'
+    isFiniteNumber(message.createdAt) &&
+    isFiniteNumber(message.expiresAt)
+  );
+}
+
+export function isComposeMultiViewportCaptureSuccess(
+  message: unknown,
+): message is ComposeMultiViewportCaptureSuccess {
+  if (!isRecord(message)) {
+    return false;
+  }
+
+  return (
+    message.type === 'compose-multi-viewport-capture-success' &&
+    typeof message.requestId === 'string' &&
+    typeof message.sessionId === 'string' &&
+    typeof message.captureId === 'string' &&
+    isNonNegativeInteger(message.segmentCount) &&
+    message.segmentCount > 0 &&
+    isFiniteNumber(message.width) &&
+    message.width > 0 &&
+    isFiniteNumber(message.height) &&
+    message.height > 0 &&
+    message.mimeType === 'image/png' &&
+    isFiniteNumber(message.createdAt) &&
+    isFiniteNumber(message.expiresAt)
   );
 }
 
