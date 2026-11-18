@@ -21,6 +21,11 @@ interface RangeBoundsInContainer {
   bottomCssPx: number;
 }
 
+interface VisibleRangeCropOptions {
+  isFinalSegment: boolean;
+  safeBottomInsetCssPx: number;
+}
+
 function calculatePhysicalOverlap(
   overlapCssPx: number,
   viewportCssHeight: number,
@@ -41,6 +46,7 @@ export interface CapturedViewportSegment {
   actualScrollTopCssPx: number;
   overlapWithPreviousCssPx: number;
   overlapWithPreviousPhysicalPx: number;
+  safeBottomInsetCssPx: number;
   crop: CaptureRectangle;
   viewport: CaptureViewport;
   screenshotDataUrl: string;
@@ -54,6 +60,8 @@ export interface MultiViewportSegmentCaptureResult {
   originalScrollTopCssPx: number;
   restoredScrollTopCssPx: number;
   targetOverlapCssPx: number;
+  safeBottomInsetCssPx: number;
+  effectiveCaptureHeightCssPx: number;
   stepCssPx: number;
   plannedSegmentCount: number;
   capturedSegmentCount: number;
@@ -168,6 +176,7 @@ function getVisibleRangeCrop(
   container: HTMLElement,
   rangeBounds: RangeBoundsInContainer,
   actualScrollTopCssPx: number,
+  options: VisibleRangeCropOptions,
 ): CaptureRectangle {
   const containerRectangle = container.getBoundingClientRect();
 
@@ -177,11 +186,32 @@ function getVisibleRangeCrop(
 
   const visibleContainerRight = Math.min(window.innerWidth, containerRectangle.right);
 
-  const visibleContainerBottom = Math.min(window.innerHeight, containerRectangle.bottom);
+  const rawVisibleContainerBottom = Math.min(window.innerHeight, containerRectangle.bottom);
+
+  /*
+   * Exclude the lower viewport band from all
+   * intermediate segments. ChatGPT can draw
+   * fading, composer overlays, scroll controls,
+   * or custom scrollbar elements in this area.
+   *
+   * The last segment keeps the full visible
+   * container so the selected range endpoint
+   * cannot be cropped.
+   */
+  const safeBottomInsetCssPx = options.isFinalSegment
+    ? 0
+    : Math.max(0, options.safeBottomInsetCssPx);
+
+  const visibleContainerBottom = Math.max(
+    visibleContainerTop,
+    rawVisibleContainerBottom - safeBottomInsetCssPx,
+  );
 
   const visibleContentTopCssPx = actualScrollTopCssPx;
 
-  const visibleContentBottomCssPx = actualScrollTopCssPx + container.clientHeight;
+  const visibleCaptureHeightCssPx = Math.max(0, visibleContainerBottom - containerRectangle.top);
+
+  const visibleContentBottomCssPx = actualScrollTopCssPx + visibleCaptureHeightCssPx;
 
   const intersectedTopCssPx = Math.max(rangeBounds.topCssPx, visibleContentTopCssPx);
 
@@ -209,7 +239,7 @@ function getVisibleRangeCrop(
 
   if (width <= 0 || height <= 0) {
     throw new MultiViewportSegmentCaptureError(
-      'The selected range does not intersect the current viewport segment.',
+      'The selected range does not intersect the safe viewport capture band.',
     );
   }
 
@@ -373,7 +403,14 @@ export async function captureMultiViewportSegments(
 
       throwIfCaptureCancelled(signal);
 
-      const crop = getVisibleRangeCrop(container, rangeBounds, actualScrollTopCssPx);
+      const isFinalSegment = segmentIndex === plan.positionsCssPx.length - 1;
+
+      const appliedSafeBottomInsetCssPx = isFinalSegment ? 0 : plan.safeBottomInsetCssPx;
+
+      const crop = getVisibleRangeCrop(container, rangeBounds, actualScrollTopCssPx, {
+        isFinalSegment,
+        safeBottomInsetCssPx: appliedSafeBottomInsetCssPx,
+      });
 
       const viewport = getViewport();
 
@@ -384,6 +421,21 @@ export async function captureMultiViewportSegments(
         actualScrollTopCssPx,
         segmentIndex === 0 ? 0 : plan.targetOverlapCssPx,
       );
+
+      console.info('ChatRange: safe viewport segment prepared.', {
+        sessionId,
+        segmentIndex,
+        isFinalSegment,
+        requestedScrollTopCssPx,
+        actualScrollTopCssPx,
+        safeBottomInsetCssPx: appliedSafeBottomInsetCssPx,
+        cropTopCssPx: crop.top,
+        cropHeightCssPx: crop.height,
+        overlapWithPreviousCssPx,
+        targetOverlapCssPx: plan.targetOverlapCssPx,
+        stepCssPx: plan.stepCssPx,
+        effectiveCaptureHeightCssPx: plan.effectiveCaptureHeightCssPx,
+      });
 
       const request: CaptureVisibleSegmentRequest = {
         type: 'capture-visible-segment',
@@ -414,6 +466,7 @@ export async function captureMultiViewportSegments(
         actualScrollTopCssPx,
         overlapWithPreviousCssPx,
         overlapWithPreviousPhysicalPx,
+        safeBottomInsetCssPx: appliedSafeBottomInsetCssPx,
         crop,
         viewport,
         screenshotDataUrl: response.screenshotDataUrl,
@@ -447,6 +500,8 @@ export async function captureMultiViewportSegments(
     originalScrollTopCssPx,
     restoredScrollTopCssPx: container.scrollTop,
     targetOverlapCssPx: plan.targetOverlapCssPx,
+    safeBottomInsetCssPx: plan.safeBottomInsetCssPx,
+    effectiveCaptureHeightCssPx: plan.effectiveCaptureHeightCssPx,
     stepCssPx: plan.stepCssPx,
     plannedSegmentCount: plan.positionsCssPx.length,
     capturedSegmentCount: segments.length,

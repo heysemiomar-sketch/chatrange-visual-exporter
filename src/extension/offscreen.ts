@@ -247,6 +247,7 @@ function refineCompositionOverlaps(segments: DecodedCompositionSegment[]): void 
           sourceWidth: previousSegment.crop.sourceWidth,
           sourceHeight: previousSegment.crop.sourceHeight,
         },
+
         currentRegion: {
           imageBitmap: currentSegment.imageBitmap,
           sourceX: currentSegment.crop.sourceX,
@@ -254,34 +255,67 @@ function refineCompositionOverlaps(segments: DecodedCompositionSegment[]): void 
           sourceWidth: currentSegment.crop.sourceWidth,
           sourceHeight: currentSegment.crop.sourceHeight,
         },
+
         expectedOverlapPhysicalPx: geometricOverlapPhysicalPx,
       });
 
-      const finalOverlapPhysicalPx = Math.min(
-        currentSegment.crop.sourceHeight - 1,
-        Math.max(0, detection.overlapPhysicalPx),
-      );
+      /*
+       * Pixel detection remains diagnostic only.
+       *
+       * Applying even a one-pixel increase to the
+       * overlap can remove antialiased Arabic text
+       * rows at a segment boundary. Until matching
+       * is text-aware, composition must preserve the
+       * geometric overlap calculated from measured
+       * scroll positions.
+       */
+      const finalOverlapPhysicalPx = geometricOverlapPhysicalPx;
 
       currentSegment.overlapPhysicalPx = finalOverlapPhysicalPx;
 
       currentSegment.uniqueHeightPhysicalPx =
         currentSegment.crop.sourceHeight - finalOverlapPhysicalPx;
 
-      console.info('ChatRange: segment overlap resolved.', {
+      console.info('ChatRange: segment overlap diagnosed.', {
         segmentIndex: currentSegment.segment.segmentIndex,
+
         expectedOverlapPhysicalPx: detection.expectedOverlapPhysicalPx,
+
         detectedOverlapPhysicalPx: detection.detectedOverlapPhysicalPx,
+
         finalOverlapPhysicalPx,
+
+        pixelAdjustmentApplied: false,
+
         confidence: detection.confidence,
+
         meanRgbDifference: detection.meanRgbDifference,
+
         accepted: detection.accepted,
-        usedGeometricFallback: detection.usedGeometricFallback,
+
+        usedGeometricFallback: true,
+
+        detectorSuggestedFallback: detection.usedGeometricFallback,
+
         evaluatedCandidateCount: detection.evaluatedCandidateCount,
       });
     } catch (error: unknown) {
-      console.warn('ChatRange: pixel overlap detection failed; using geometric overlap.', {
+      /*
+       * Detection failure never changes the already
+       * calculated geometric overlap.
+       */
+      currentSegment.overlapPhysicalPx = geometricOverlapPhysicalPx;
+
+      currentSegment.uniqueHeightPhysicalPx =
+        currentSegment.crop.sourceHeight - geometricOverlapPhysicalPx;
+
+      console.warn('ChatRange: pixel overlap diagnosis failed; preserving geometric overlap.', {
         segmentIndex: currentSegment.segment.segmentIndex,
+
         geometricOverlapPhysicalPx,
+
+        pixelAdjustmentApplied: false,
+
         message: error instanceof Error ? error.message : 'Unknown pixel overlap failure.',
       });
     }

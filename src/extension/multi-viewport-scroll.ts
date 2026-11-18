@@ -1,8 +1,12 @@
 import type { ConversationTurn } from '../adapters/base';
 
-const DEFAULT_TARGET_OVERLAP_CSS_PX = 120;
-const MINIMUM_SCROLL_MOVEMENT_CSS_PX = 8;
-const MAXIMUM_VIEWPORT_SEGMENTS = 20;
+export const DEFAULT_TARGET_OVERLAP_CSS_PX = 120;
+
+export const DEFAULT_SAFE_BOTTOM_INSET_CSS_PX = 96;
+
+export const MINIMUM_SCROLL_MOVEMENT_CSS_PX = 8;
+
+export const MAXIMUM_VIEWPORT_SEGMENTS = 20;
 
 export interface ScrollContainerMetrics {
   element: HTMLElement;
@@ -18,12 +22,15 @@ export interface MultiViewportScrollPlan {
   endScrollTopCssPx: number;
   stepCssPx: number;
   targetOverlapCssPx: number;
+  safeBottomInsetCssPx: number;
+  effectiveCaptureHeightCssPx: number;
   positionsCssPx: number[];
 }
 
 export interface CreateScrollPlanInput {
   turns: ConversationTurn[];
   targetOverlapCssPx?: number;
+  safeBottomInsetCssPx?: number;
   maximumSegments?: number;
   minimumMovementCssPx?: number;
 }
@@ -32,6 +39,7 @@ export type ScrollPlanFailureCode =
   | 'NO_TURNS'
   | 'NO_SCROLL_CONTAINER'
   | 'INVALID_VIEWPORT_HEIGHT'
+  | 'INVALID_SAFE_CAPTURE_HEIGHT'
   | 'RANGE_OUTSIDE_SCROLL_CONTAINER'
   | 'MOVEMENT_TOO_SMALL'
   | 'SEGMENT_LIMIT_EXCEEDED';
@@ -43,6 +51,7 @@ export class ScrollPlanError extends Error {
     super(message);
 
     this.name = 'ScrollPlanError';
+
     this.code = code;
   }
 }
@@ -193,7 +202,7 @@ function createScrollPositions(
     if (positions.length >= maximumSegments) {
       throw new ScrollPlanError(
         'SEGMENT_LIMIT_EXCEEDED',
-        `The scroll plan requires more than ${maximumSegments} viewport segments.`,
+        `The scroll plan requires more than ` + `${maximumSegments} viewport segments.`,
       );
     }
 
@@ -217,7 +226,7 @@ function createScrollPositions(
     if (positions.length >= maximumSegments) {
       throw new ScrollPlanError(
         'SEGMENT_LIMIT_EXCEEDED',
-        `The scroll plan requires more than ${maximumSegments} viewport segments.`,
+        `The scroll plan requires more than ` + `${maximumSegments} viewport segments.`,
       );
     }
 
@@ -255,20 +264,51 @@ export function createMultiViewportScrollPlan(
     );
   }
 
+  const minimumMovementCssPx = input.minimumMovementCssPx ?? MINIMUM_SCROLL_MOVEMENT_CSS_PX;
+
+  const maximumSafeBottomInsetCssPx = Math.max(
+    0,
+    container.clientHeightCssPx - minimumMovementCssPx * 2,
+  );
+
+  const safeBottomInsetCssPx = clamp(
+    input.safeBottomInsetCssPx ?? DEFAULT_SAFE_BOTTOM_INSET_CSS_PX,
+    0,
+    maximumSafeBottomInsetCssPx,
+  );
+
+  const effectiveCaptureHeightCssPx = container.clientHeightCssPx - safeBottomInsetCssPx;
+
+  if (effectiveCaptureHeightCssPx <= minimumMovementCssPx) {
+    throw new ScrollPlanError(
+      'INVALID_SAFE_CAPTURE_HEIGHT',
+      `The safe capture height is only ` + `${effectiveCaptureHeightCssPx.toFixed(1)} CSS pixels.`,
+    );
+  }
+
+  const maximumOverlapCssPx = Math.max(0, effectiveCaptureHeightCssPx - minimumMovementCssPx);
+
   const targetOverlapCssPx = clamp(
     input.targetOverlapCssPx ?? DEFAULT_TARGET_OVERLAP_CSS_PX,
     0,
-    Math.max(0, container.clientHeightCssPx - MINIMUM_SCROLL_MOVEMENT_CSS_PX),
+    maximumOverlapCssPx,
   );
 
-  const minimumMovementCssPx = input.minimumMovementCssPx ?? MINIMUM_SCROLL_MOVEMENT_CSS_PX;
-
-  const stepCssPx = container.clientHeightCssPx - targetOverlapCssPx;
+  /*
+   * Intermediate captures exclude the unsafe
+   * lower viewport band. Reduce the scroll step
+   * by the same amount so the remaining safe
+   * capture bands still overlap continuously.
+   */
+  const stepCssPx = effectiveCaptureHeightCssPx - targetOverlapCssPx;
 
   if (stepCssPx < minimumMovementCssPx) {
     throw new ScrollPlanError(
       'MOVEMENT_TOO_SMALL',
-      `The calculated scroll step is ${stepCssPx.toFixed(1)} CSS pixels, below the required minimum of ${minimumMovementCssPx}.`,
+      `The calculated scroll step is ` +
+        `${stepCssPx.toFixed(1)} CSS pixels, ` +
+        `below the required minimum of ` +
+        `${minimumMovementCssPx}.`,
     );
   }
 
@@ -287,6 +327,12 @@ export function createMultiViewportScrollPlan(
 
   const startScrollTopCssPx = clamp(rangeTopCssPx, 0, container.maximumScrollTopCssPx);
 
+  /*
+   * The final capture is allowed to use the full
+   * visible container. Position it so the range
+   * bottom is visible without applying the safe
+   * bottom inset to the last segment.
+   */
   const desiredEndScrollTopCssPx = rangeBottomCssPx - container.clientHeightCssPx;
 
   const endScrollTopCssPx = clamp(
@@ -311,6 +357,8 @@ export function createMultiViewportScrollPlan(
     endScrollTopCssPx,
     stepCssPx,
     targetOverlapCssPx,
+    safeBottomInsetCssPx,
+    effectiveCaptureHeightCssPx,
     positionsCssPx,
   };
 }
