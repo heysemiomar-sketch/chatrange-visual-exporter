@@ -1,6 +1,6 @@
 {
   "name": "chatrange-visual-exporter",
-  "version": "0.0.1",
+  "version": "0.6.1",
   "private": true,
   "description": "A Manifest V3 extension for capturing selected AI conversation ranges as ordered high-resolution visual content.",
   "type": "module",
