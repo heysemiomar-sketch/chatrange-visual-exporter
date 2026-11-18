@@ -21,6 +21,8 @@ import {
   MAXIMUM_VIEWPORT_SEGMENTS,
 } from '../core/multi-viewport-capture';
 
+import { detectCanvasPixelOverlap } from './pixel-overlap-canvas';
+
 interface PhysicalCropRectangle {
   sourceX: number;
   sourceY: number;
@@ -216,6 +218,76 @@ async function decodeCompositionSegments(
   }
 }
 
+function refineCompositionOverlaps(segments: DecodedCompositionSegment[]): void {
+  for (let segmentIndex = 1; segmentIndex < segments.length; segmentIndex += 1) {
+    const previousSegment = segments[segmentIndex - 1];
+
+    const currentSegment = segments[segmentIndex];
+
+    if (!previousSegment || !currentSegment) {
+      continue;
+    }
+
+    const geometricOverlapPhysicalPx = currentSegment.overlapPhysicalPx;
+
+    if (
+      geometricOverlapPhysicalPx <= 0 ||
+      previousSegment.crop.sourceHeight <= 1 ||
+      currentSegment.crop.sourceHeight <= 1
+    ) {
+      continue;
+    }
+
+    try {
+      const detection = detectCanvasPixelOverlap({
+        previousRegion: {
+          imageBitmap: previousSegment.imageBitmap,
+          sourceX: previousSegment.crop.sourceX,
+          sourceY: previousSegment.crop.sourceY,
+          sourceWidth: previousSegment.crop.sourceWidth,
+          sourceHeight: previousSegment.crop.sourceHeight,
+        },
+        currentRegion: {
+          imageBitmap: currentSegment.imageBitmap,
+          sourceX: currentSegment.crop.sourceX,
+          sourceY: currentSegment.crop.sourceY,
+          sourceWidth: currentSegment.crop.sourceWidth,
+          sourceHeight: currentSegment.crop.sourceHeight,
+        },
+        expectedOverlapPhysicalPx: geometricOverlapPhysicalPx,
+      });
+
+      const finalOverlapPhysicalPx = Math.min(
+        currentSegment.crop.sourceHeight - 1,
+        Math.max(0, detection.overlapPhysicalPx),
+      );
+
+      currentSegment.overlapPhysicalPx = finalOverlapPhysicalPx;
+
+      currentSegment.uniqueHeightPhysicalPx =
+        currentSegment.crop.sourceHeight - finalOverlapPhysicalPx;
+
+      console.info('ChatRange: segment overlap resolved.', {
+        segmentIndex: currentSegment.segment.segmentIndex,
+        expectedOverlapPhysicalPx: detection.expectedOverlapPhysicalPx,
+        detectedOverlapPhysicalPx: detection.detectedOverlapPhysicalPx,
+        finalOverlapPhysicalPx,
+        confidence: detection.confidence,
+        meanRgbDifference: detection.meanRgbDifference,
+        accepted: detection.accepted,
+        usedGeometricFallback: detection.usedGeometricFallback,
+        evaluatedCandidateCount: detection.evaluatedCandidateCount,
+      });
+    } catch (error: unknown) {
+      console.warn('ChatRange: pixel overlap detection failed; using geometric overlap.', {
+        segmentIndex: currentSegment.segment.segmentIndex,
+        geometricOverlapPhysicalPx,
+        message: error instanceof Error ? error.message : 'Unknown pixel overlap failure.',
+      });
+    }
+  }
+}
+
 function validateCompositionWidths(segments: DecodedCompositionSegment[]): number {
   const firstSegment = segments[0];
 
@@ -372,6 +444,8 @@ async function composeAndStoreSegments(
   const decodedSegments = await decodeCompositionSegments(request.segments);
 
   try {
+    refineCompositionOverlaps(decodedSegments);
+
     const width = validateCompositionWidths(decodedSegments);
 
     const height = calculateComposedHeight(decodedSegments);
