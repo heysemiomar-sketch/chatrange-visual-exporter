@@ -8,6 +8,29 @@ The project follows Semantic Versioning where practical during early development
 
 ### Added
 
+- Pixel-based overlap detection for adjacent multi-viewport capture segments
+- Canvas adapter for reading cropped segment pixels during offscreen composition
+- Confidence, RGB-difference, and candidate-count diagnostics for segment joins
+- Automated tests for exact, shifted, unrelated, invalid, and short image inputs
+
+### Changed
+
+- Multi-viewport composition now searches within 80 physical pixels of the geometric overlap estimate
+- Strong pixel matches refine the overlap used for composition
+- Pixel comparison samples the central image region while excluding 15 percent from each horizontal edge
+
+### Fixed
+
+- Reduced the risk of duplicated or missing text rows at multi-viewport segment joins
+- Preserved geometric overlap as a fallback when pixel matching is weak or unavailable
+
+### Known limitations
+
+- Pixel overlap detection compares sampled RGB values and can be affected by dynamic content or rendering changes between screenshots
+- Low-confidence joins continue to use the geometric overlap estimate
+
+### Added
+
 - Escape-based cancellation for long multi-viewport capture sessions
 - Vitest-based automated unit testing
 - Automated tests for overlap conversion, composed-height calculation, scroll validation, session-state transitions, progress calculation, safety limits, and cancellation behavior
