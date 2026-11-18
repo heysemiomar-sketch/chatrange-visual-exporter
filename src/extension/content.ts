@@ -1,4 +1,6 @@
-import { chatGptAdapter } from '../adapters/chatgpt';
+import type { ChatAdapter } from '../adapters/base';
+
+import { findSupportedChatAdapter } from '../adapters/registry';
 
 import {
   createCaptureCancellationSession,
@@ -187,6 +189,7 @@ function waitForCleanPaint(): Promise<void> {
 
 async function captureVisibleRange(range: SelectedRange, rectangle: DOMRect): Promise<void> {
   clearCaptureUi();
+
   await waitForCleanPaint();
 
   const request: CaptureVisibleRangeRequest = {
@@ -240,7 +243,8 @@ async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
       onProgress(completedSegments, totalSegments): void {
         showStatus(
           `ChatRange: captured segment ` +
-            `${completedSegments} of ${totalSegments}. ` +
+            `${completedSegments} of ` +
+            `${totalSegments}. ` +
             `Press Escape to cancel.`,
           'info',
         );
@@ -251,8 +255,8 @@ async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
 
     showStatus(
       `ChatRange: composing ` +
-        `${segmentCapture.capturedSegmentCount} segment(s). ` +
-        `Press Escape to cancel.`,
+        `${segmentCapture.capturedSegmentCount} ` +
+        `segment(s). Press Escape to cancel.`,
       'info',
     );
 
@@ -272,8 +276,10 @@ async function captureAndComposeLongRange(range: SelectedRange): Promise<void> {
     });
 
     showStatus(
-      `ChatRange: composed ${composition.segmentCount} ` +
-        `segment(s) into a ${composition.width} × ` +
+      `ChatRange: composed ` +
+        `${composition.segmentCount} ` +
+        `segment(s) into a ` +
+        `${composition.width} × ` +
         `${composition.height} PNG.`,
       'success',
     );
@@ -309,7 +315,10 @@ async function processReadyRange(range: SelectedRange): Promise<void> {
     const rectangle = getRangeRectangle(range);
 
     if (isRangeFullyVisible(rectangle)) {
-      showStatus(`ChatRange: capturing ${range.turns.length} visible turn(s).`, 'success');
+      showStatus(
+        `ChatRange: capturing ` + `${range.turns.length} ` + `visible turn(s).`,
+        'success',
+      );
 
       await captureVisibleRange(range, rectangle);
 
@@ -332,30 +341,46 @@ function handleReadyRange(range: SelectedRange): void {
   });
 }
 
+function runWithAdapter(adapter: ChatAdapter): void {
+  const initialTurns = adapter.findConversationTurns();
+
+  if (initialTurns.length === 0) {
+    showStatus(
+      `ChatRange: no mounted conversation turns ` + `found for ${adapter.displayName}.`,
+      'error',
+    );
+
+    return;
+  }
+
+  console.info('ChatRange: active adapter selected.', {
+    adapterId: adapter.id,
+    displayName: adapter.displayName,
+    hostname: window.location.hostname,
+    initialTurnCount: initialTurns.length,
+  });
+
+  startRangePicker(() => adapter.findConversationTurns(), {
+    onStateChange: describeSelectionState,
+    onRangeReady: handleReadyRange,
+    onCancel(): void {
+      console.info('ChatRange: picker cancelled.', {
+        adapterId: adapter.id,
+      });
+    },
+  });
+}
+
 function run(): void {
-  if (!chatGptAdapter.isSupportedPage()) {
+  const adapter = findSupportedChatAdapter();
+
+  if (!adapter) {
     showStatus('ChatRange: unsupported page.', 'error');
 
     return;
   }
 
-  const initialTurns = chatGptAdapter.findConversationTurns();
-
-  if (initialTurns.length === 0) {
-    showStatus('ChatRange: no mounted conversation turns found.', 'error');
-
-    return;
-  }
-
-  startRangePicker(() => chatGptAdapter.findConversationTurns(), {
-    onStateChange: describeSelectionState,
-
-    onRangeReady: handleReadyRange,
-
-    onCancel(): void {
-      console.info('ChatRange: picker cancelled.');
-    },
-  });
+  runWithAdapter(adapter);
 }
 
 run();
