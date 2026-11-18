@@ -16,9 +16,16 @@ import {
   isProcessVisibleCaptureSuccess,
 } from '../core/capture-messages';
 
-const SUPPORTED_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
+const SUPPORTED_HOSTS = new Set([
+  'chatgpt.com',
+  'chat.openai.com',
+  'copilot.cloud.microsoft',
+  'copilot.microsoft.com',
+]);
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
+
+const CONTENT_SCRIPT_PATH = 'assets/content.js';
 
 let creatingOffscreenDocument: Promise<void> | null = null;
 
@@ -137,7 +144,9 @@ async function captureVisibleTabWithRetry(windowId: number): Promise<string> {
 
       console.warn('ChatRange: capture quota reached; retrying after backoff.', {
         attempt,
+
         maximumAttempts: MAXIMUM_CAPTURE_ATTEMPTS,
+
         retryAfterMilliseconds: retryDelay,
       });
 
@@ -187,6 +196,7 @@ async function readImageDimensions(screenshotDataUrl: string): Promise<{
   try {
     return {
       width: imageBitmap.width,
+
       height: imageBitmap.height,
     };
   } finally {
@@ -212,9 +222,13 @@ async function processVisibleScreenshot(
 
   const processRequest: ProcessVisibleCaptureRequest = {
     type: 'process-visible-capture',
+
     requestId: request.requestId,
+
     screenshotDataUrl,
+
     crop: request.crop,
+
     viewport: request.viewport,
   };
 
@@ -241,6 +255,7 @@ async function handleVisibleRangeCapture(
 
     console.error('ChatRange: visible-range capture failed.', {
       requestId: request.requestId,
+
       message,
     });
 
@@ -259,14 +274,23 @@ async function handleVisibleSegmentCapture(
 
     return {
       type: 'capture-visible-segment-success',
+
       requestId: request.requestId,
+
       sessionId: request.sessionId,
+
       segmentIndex: request.segmentIndex,
+
       scrollTopCssPx: request.scrollTopCssPx,
+
       overlapWithPreviousCssPx: request.overlapWithPreviousCssPx,
+
       screenshotDataUrl,
+
       imageWidthPhysicalPx: dimensions.width,
+
       imageHeightPhysicalPx: dimensions.height,
+
       capturedAt: Date.now(),
     };
   } catch (error: unknown) {
@@ -275,8 +299,11 @@ async function handleVisibleSegmentCapture(
 
     console.error('ChatRange: viewport-segment capture failed.', {
       requestId: request.requestId,
+
       sessionId: request.sessionId,
+
       segmentIndex: request.segmentIndex,
+
       message,
     });
 
@@ -303,8 +330,11 @@ async function handleComposition(
 
     console.error('ChatRange: multi-viewport composition forwarding failed.', {
       requestId: request.requestId,
+
       sessionId: request.sessionId,
+
       segmentCount: request.segments.length,
+
       message,
     });
 
@@ -326,12 +356,32 @@ function sendMissingWindowFailure(
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.info('ChatRange Visual Exporter installed.');
+  console.info('ChatRange Visual Exporter installed.', {
+    supportedHosts: [...SUPPORTED_HOSTS],
+  });
 });
 
 chrome.action.onClicked.addListener((tab) => {
-  if (tab.id === undefined || !isSupportedUrl(tab.url)) {
-    console.warn('ChatRange: open a supported ChatGPT conversation first.');
+  console.info('ChatRange: extension action clicked.', {
+    tabId: tab.id ?? null,
+
+    url: tab.url ?? null,
+
+    supported: isSupportedUrl(tab.url),
+  });
+
+  if (tab.id === undefined) {
+    console.warn('ChatRange: the active tab has no tab ID.');
+
+    return;
+  }
+
+  if (!isSupportedUrl(tab.url)) {
+    console.warn('ChatRange: open a supported ChatGPT or Microsoft Copilot conversation first.', {
+      url: tab.url ?? null,
+
+      supportedHosts: [...SUPPORTED_HOSTS],
+    });
 
     return;
   }
@@ -341,10 +391,24 @@ chrome.action.onClicked.addListener((tab) => {
       target: {
         tabId: tab.id,
       },
-      files: ['assets/content.js'],
+
+      files: [CONTENT_SCRIPT_PATH],
+    })
+    .then(() => {
+      console.info('ChatRange: content script injected.', {
+        tabId: tab.id,
+
+        url: tab.url ?? null,
+      });
     })
     .catch((error: unknown) => {
-      console.error('ChatRange: failed to inject the content script.', error);
+      console.error('ChatRange: failed to inject the content script.', {
+        tabId: tab.id,
+
+        url: tab.url ?? null,
+
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
 });
 

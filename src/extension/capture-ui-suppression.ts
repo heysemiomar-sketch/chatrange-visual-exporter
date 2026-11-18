@@ -10,6 +10,14 @@ const OVERLAY_SELECTORS = [
   '[data-testid="composer-footer"]',
   '[data-testid="scroll-to-bottom-button"]',
   '[data-testid*="scroll-to-bottom"]',
+
+  '#m365-chat-input-shared-container',
+  '[data-test-id="chat-input-wrapper"]',
+  '[data-testid="scroll-bottom-indicator"]',
+  '#suggestions-above-input-portal',
+  '[data-testid="grounding-menu"]',
+  '[data-testid="bebop-lite-content-below"]',
+
   'button[aria-label="Scroll to bottom"]',
   'button[aria-label="scroll to bottom"]',
   'button[aria-label*="Scroll to bottom"]',
@@ -22,6 +30,27 @@ const INPUT_SELECTORS = [
   'textarea[placeholder*="Ask"]',
   '[contenteditable="true"][data-placeholder*="Ask"]',
   '[contenteditable="true"][aria-label*="Ask"]',
+
+  '#m365-chat-editor-target-element',
+  '[contenteditable="true"][aria-label="Message Copilot"]',
+  '[contenteditable="true"][data-placeholder="Message Copilot"]',
+];
+
+const COMPOSER_ROOT_SELECTORS = [
+  'form[data-type="unified-composer"]',
+  '[data-testid="composer"]',
+  '[data-testid="composer-footer"]',
+  '#m365-chat-input-shared-container',
+  '[data-test-id="chat-input-wrapper"]',
+  'form',
+].join(', ');
+
+const PICKER_ATTRIBUTES = [
+  'data-chatrange-picker-hover',
+  'data-chatrange-picker-start',
+  'data-chatrange-picker-end',
+  'data-chatrange-picker-range',
+  'data-chatrange-highlighted',
 ];
 
 export interface CaptureUiSuppression {
@@ -61,6 +90,24 @@ function installSuppressionStyle(): void {
       [data-testid*="scroll-to-bottom"],
 
     html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      #m365-chat-input-shared-container,
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [data-test-id="chat-input-wrapper"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [data-testid="scroll-bottom-indicator"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      #suggestions-above-input-portal,
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [data-testid="grounding-menu"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [data-testid="bebop-lite-content-below"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
       button[aria-label*="Scroll to bottom"],
 
     html[${CAPTURE_MODE_ATTRIBUTE}="true"]
@@ -76,7 +123,16 @@ function installSuppressionStyle(): void {
       [contenteditable="true"][data-placeholder*="Ask"],
 
     html[${CAPTURE_MODE_ATTRIBUTE}="true"]
-      [contenteditable="true"][aria-label*="Ask"] {
+      [contenteditable="true"][aria-label*="Ask"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      #m365-chat-editor-target-element,
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [contenteditable="true"][aria-label="Message Copilot"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      [contenteditable="true"][data-placeholder="Message Copilot"] {
       visibility: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
@@ -91,12 +147,7 @@ function isSafeElement(element: HTMLElement): boolean {
 }
 
 function findComposerRoot(input: HTMLElement): HTMLElement {
-  const root = input.closest<HTMLElement>(
-    'form[data-type="unified-composer"], ' +
-      '[data-testid="composer"], ' +
-      '[data-testid="composer-footer"], ' +
-      'form',
-  );
+  const root = input.closest<HTMLElement>(COMPOSER_ROOT_SELECTORS);
 
   return root ?? input;
 }
@@ -111,15 +162,17 @@ function suppressElement(element: HTMLElement, markedElements: Set<HTMLElement>)
   markedElements.add(element);
 }
 
+function queryElements(root: ParentNode, selector: string): HTMLElement[] {
+  try {
+    return Array.from(root.querySelectorAll<HTMLElement>(selector));
+  } catch {
+    return [];
+  }
+}
+
 function suppressMatchingElements(root: ParentNode, markedElements: Set<HTMLElement>): void {
   for (const selector of OVERLAY_SELECTORS) {
-    let elements: NodeListOf<HTMLElement>;
-
-    try {
-      elements = root.querySelectorAll<HTMLElement>(selector);
-    } catch {
-      continue;
-    }
+    const elements = queryElements(root, selector);
 
     for (const element of elements) {
       suppressElement(element, markedElements);
@@ -127,38 +180,34 @@ function suppressMatchingElements(root: ParentNode, markedElements: Set<HTMLElem
   }
 
   for (const selector of INPUT_SELECTORS) {
-    let inputs: NodeListOf<HTMLElement>;
-
-    try {
-      inputs = root.querySelectorAll<HTMLElement>(selector);
-    } catch {
-      continue;
-    }
+    const inputs = queryElements(root, selector);
 
     for (const input of inputs) {
       suppressElement(findComposerRoot(input), markedElements);
     }
   }
 
-  if (root instanceof HTMLElement) {
-    for (const selector of OVERLAY_SELECTORS) {
-      try {
-        if (root.matches(selector)) {
-          suppressElement(root, markedElements);
-        }
-      } catch {
-        continue;
-      }
-    }
+  if (!(root instanceof HTMLElement)) {
+    return;
+  }
 
-    for (const selector of INPUT_SELECTORS) {
-      try {
-        if (root.matches(selector)) {
-          suppressElement(findComposerRoot(root), markedElements);
-        }
-      } catch {
-        continue;
+  for (const selector of OVERLAY_SELECTORS) {
+    try {
+      if (root.matches(selector)) {
+        suppressElement(root, markedElements);
       }
+    } catch {
+      continue;
+    }
+  }
+
+  for (const selector of INPUT_SELECTORS) {
+    try {
+      if (root.matches(selector)) {
+        suppressElement(findComposerRoot(root), markedElements);
+      }
+    } catch {
+      continue;
     }
   }
 }
@@ -166,15 +215,7 @@ function suppressMatchingElements(root: ParentNode, markedElements: Set<HTMLElem
 function clearPickerUi(): void {
   document.getElementById('chatrange-status')?.remove();
 
-  const pickerAttributes = [
-    'data-chatrange-picker-hover',
-    'data-chatrange-picker-start',
-    'data-chatrange-picker-end',
-    'data-chatrange-picker-range',
-    'data-chatrange-highlighted',
-  ];
-
-  for (const attribute of pickerAttributes) {
+  for (const attribute of PICKER_ATTRIBUTES) {
     const elements = document.querySelectorAll<HTMLElement>(`[${attribute}]`);
 
     for (const element of elements) {
@@ -201,6 +242,7 @@ function describeElements(elements: Set<HTMLElement>): Array<Record<string, unkn
       tag: element.tagName,
       id: element.id || null,
       testId: element.getAttribute('data-testid'),
+      dataTestId: element.getAttribute('data-test-id'),
       dataType: element.getAttribute('data-type'),
       ariaLabel: element.getAttribute('aria-label'),
       width: Math.round(rectangle.width),
@@ -235,6 +277,7 @@ export function suppressCaptureUi(): CaptureUiSuppression {
   });
 
   console.info('ChatRange: capture UI suppressed.', {
+    hostname: window.location.hostname,
     captureModeActive: document.documentElement.getAttribute(CAPTURE_MODE_ATTRIBUTE),
     suppressedElementCount: markedElements.size,
     suppressedElements: describeElements(markedElements),
@@ -257,6 +300,7 @@ export function suppressCaptureUi(): CaptureUiSuppression {
       markedElements.clear();
 
       console.info('ChatRange: capture UI restored.', {
+        hostname: window.location.hostname,
         captureModeActive: document.documentElement.hasAttribute(CAPTURE_MODE_ATTRIBUTE),
         restoredElementCount,
       });

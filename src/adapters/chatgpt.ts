@@ -30,6 +30,7 @@ function isHTMLElement(element: Element): element is HTMLElement {
 
 function isUsableElement(element: HTMLElement): boolean {
   const rectangle = element.getBoundingClientRect();
+
   const textLength = element.textContent?.trim().length ?? 0;
 
   return rectangle.width > 0 && rectangle.height > 0 && textLength > 0;
@@ -94,6 +95,10 @@ function createTurns(elements: HTMLElement[], role: MessageRole): UnindexedConve
 }
 
 export const chatGptAdapter: ChatAdapter = {
+  id: 'chatgpt',
+
+  displayName: 'ChatGPT',
+
   isSupportedPage(): boolean {
     return (
       window.location.hostname === 'chatgpt.com' || window.location.hostname === 'chat.openai.com'
@@ -125,6 +130,7 @@ export const chatGptAdapter: ChatAdapter = {
     }));
 
     console.info('ChatRange: ChatGPT adapter detection.', {
+      adapterId: chatGptAdapter.id,
       assistantSelector: effectiveAssistantResult.selector,
       assistantCount: effectiveAssistantResult.elements.length,
       userSelector: userResult.selector,

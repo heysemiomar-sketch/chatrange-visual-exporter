@@ -12,9 +12,26 @@ import type {
 
 import { suppressCaptureUi } from './capture-ui-suppression';
 
-import { createMultiViewportScrollPlan, scrollToPosition } from './multi-viewport-scroll';
+import {
+  DEFAULT_SAFE_BOTTOM_INSET_CSS_PX,
+  createMultiViewportScrollPlan,
+  scrollToPosition,
+} from './multi-viewport-scroll';
 
 const MAXIMUM_VIEWPORT_SEGMENTS = 20;
+
+/*
+ * ChatGPT currently needs the shared 96 CSS pixel
+ * safe band.
+ *
+ * Microsoft Copilot renders a taller lower fade and
+ * overlay region around the composer. A 160 CSS pixel
+ * safe band keeps that region out of intermediate
+ * screenshots.
+ */
+const COPILOT_SAFE_BOTTOM_INSET_CSS_PX = 160;
+
+const COPILOT_HOSTNAMES = new Set(['copilot.cloud.microsoft', 'copilot.microsoft.com']);
 
 interface RangeBoundsInContainer {
   topCssPx: number;
@@ -24,6 +41,14 @@ interface RangeBoundsInContainer {
 interface VisibleRangeCropOptions {
   isFinalSegment: boolean;
   safeBottomInsetCssPx: number;
+}
+
+function getPlatformSafeBottomInsetCssPx(): number {
+  if (COPILOT_HOSTNAMES.has(window.location.hostname)) {
+    return COPILOT_SAFE_BOTTOM_INSET_CSS_PX;
+  }
+
+  return DEFAULT_SAFE_BOTTOM_INSET_CSS_PX;
 }
 
 function calculatePhysicalOverlap(
@@ -152,6 +177,7 @@ function measureRangeBoundsInContainer(
 
     return {
       topCssPx,
+
       bottomCssPx: topCssPx + rectangle.height,
     };
   });
@@ -189,12 +215,10 @@ function getVisibleRangeCrop(
   const rawVisibleContainerBottom = Math.min(window.innerHeight, containerRectangle.bottom);
 
   /*
-   * Exclude the lower viewport band from all
-   * intermediate segments. ChatGPT can draw
-   * fading, composer overlays, scroll controls,
-   * or custom scrollbar elements in this area.
+   * Exclude the lower unsafe viewport band from
+   * every intermediate segment.
    *
-   * The last segment keeps the full visible
+   * The final segment keeps the full visible
    * container so the selected range endpoint
    * cannot be cropped.
    */
@@ -254,7 +278,9 @@ function getVisibleRangeCrop(
 function getViewport(): CaptureViewport {
   return {
     cssWidth: window.innerWidth,
+
     cssHeight: window.innerHeight,
+
     devicePixelRatio: window.devicePixelRatio,
   };
 }
@@ -357,8 +383,26 @@ export async function captureMultiViewportSegments(
 ): Promise<MultiViewportSegmentCaptureResult> {
   throwIfCaptureCancelled(signal);
 
+  const requestedSafeBottomInsetCssPx = getPlatformSafeBottomInsetCssPx();
+
   const plan = createMultiViewportScrollPlan({
     turns,
+
+    safeBottomInsetCssPx: requestedSafeBottomInsetCssPx,
+  });
+
+  console.info('ChatRange: platform capture settings resolved.', {
+    hostname: window.location.hostname,
+
+    requestedSafeBottomInsetCssPx,
+
+    appliedSafeBottomInsetCssPx: plan.safeBottomInsetCssPx,
+
+    targetOverlapCssPx: plan.targetOverlapCssPx,
+
+    effectiveCaptureHeightCssPx: plan.effectiveCaptureHeightCssPx,
+
+    stepCssPx: plan.stepCssPx,
   });
 
   if (plan.positionsCssPx.length > MAXIMUM_VIEWPORT_SEGMENTS) {
@@ -409,6 +453,7 @@ export async function captureMultiViewportSegments(
 
       const crop = getVisibleRangeCrop(container, rangeBounds, actualScrollTopCssPx, {
         isFinalSegment,
+
         safeBottomInsetCssPx: appliedSafeBottomInsetCssPx,
       });
 
@@ -424,6 +469,7 @@ export async function captureMultiViewportSegments(
 
       console.info('ChatRange: safe viewport segment prepared.', {
         sessionId,
+        hostname: window.location.hostname,
         segmentIndex,
         isFinalSegment,
         requestedScrollTopCssPx,
@@ -439,12 +485,19 @@ export async function captureMultiViewportSegments(
 
       const request: CaptureVisibleSegmentRequest = {
         type: 'capture-visible-segment',
+
         requestId: createRequestId(),
+
         sessionId,
+
         segmentIndex,
+
         scrollTopCssPx: actualScrollTopCssPx,
+
         overlapWithPreviousCssPx,
+
         crop,
+
         viewport,
       };
 
@@ -462,16 +515,27 @@ export async function captureMultiViewportSegments(
 
       segments.push({
         segmentIndex,
+
         requestedScrollTopCssPx,
+
         actualScrollTopCssPx,
+
         overlapWithPreviousCssPx,
+
         overlapWithPreviousPhysicalPx,
+
         safeBottomInsetCssPx: appliedSafeBottomInsetCssPx,
+
         crop,
+
         viewport,
+
         screenshotDataUrl: response.screenshotDataUrl,
+
         imageWidthPhysicalPx: response.imageWidthPhysicalPx,
+
         imageHeightPhysicalPx: response.imageHeightPhysicalPx,
+
         capturedAt: response.capturedAt,
       });
 
@@ -497,14 +561,23 @@ export async function captureMultiViewportSegments(
 
   return {
     sessionId,
+
     originalScrollTopCssPx,
+
     restoredScrollTopCssPx: container.scrollTop,
+
     targetOverlapCssPx: plan.targetOverlapCssPx,
+
     safeBottomInsetCssPx: plan.safeBottomInsetCssPx,
+
     effectiveCaptureHeightCssPx: plan.effectiveCaptureHeightCssPx,
+
     stepCssPx: plan.stepCssPx,
+
     plannedSegmentCount: plan.positionsCssPx.length,
+
     capturedSegmentCount: segments.length,
+
     segments,
   };
 }
