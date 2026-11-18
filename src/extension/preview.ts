@@ -10,9 +10,15 @@ const imageElement = document.querySelector<HTMLImageElement>('#capture');
 
 const downloadButton = document.querySelector<HTMLButtonElement>('#download');
 
+const copyButton = document.querySelector<HTMLButtonElement>('#copy-capture');
+
 const deleteButton = document.querySelector<HTMLButtonElement>('#delete-capture');
 
 let currentObjectUrl: string | null = null;
+
+let currentCapture: StoredCapture | null = null;
+
+let copyButtonResetTimer: number | null = null;
 
 function getCaptureId(): string | null {
   const parameters = new URLSearchParams(window.location.search);
@@ -30,6 +36,28 @@ function revokeCurrentObjectUrl(): void {
   currentObjectUrl = null;
 }
 
+function clearCopyButtonResetTimer(): void {
+  if (copyButtonResetTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(copyButtonResetTimer);
+
+  copyButtonResetTimer = null;
+}
+
+function resetCopyButton(): void {
+  clearCopyButtonResetTimer();
+
+  if (!copyButton) {
+    return;
+  }
+
+  copyButton.textContent = 'Copy PNG';
+
+  copyButton.classList.remove('copy-success', 'copy-error');
+}
+
 function createDownloadFilename(captureId: string): string {
   const shortId = captureId.slice(0, 8);
 
@@ -43,12 +71,37 @@ function formatTimestamp(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-function setUnavailableState(message: string): void {
-  revokeCurrentObjectUrl();
-
+function setStatus(message: string): void {
   if (statusElement) {
     statusElement.textContent = message;
   }
+}
+
+function setCopyButtonFeedback(message: string, result: 'success' | 'error'): void {
+  if (!copyButton) {
+    return;
+  }
+
+  clearCopyButtonResetTimer();
+
+  copyButton.textContent = message;
+
+  copyButton.classList.toggle('copy-success', result === 'success');
+
+  copyButton.classList.toggle('copy-error', result === 'error');
+
+  copyButtonResetTimer = window.setTimeout(() => {
+    resetCopyButton();
+  }, 2500);
+}
+
+function setUnavailableState(message: string): void {
+  revokeCurrentObjectUrl();
+  clearCopyButtonResetTimer();
+
+  currentCapture = null;
+
+  setStatus(message);
 
   if (metadataElement) {
     metadataElement.hidden = true;
@@ -56,11 +109,20 @@ function setUnavailableState(message: string): void {
 
   if (imageElement) {
     imageElement.hidden = true;
+
     imageElement.removeAttribute('src');
   }
 
   if (downloadButton) {
     downloadButton.disabled = true;
+  }
+
+  if (copyButton) {
+    copyButton.disabled = true;
+
+    copyButton.textContent = 'Copy PNG';
+
+    copyButton.classList.remove('copy-success', 'copy-error');
   }
 
   if (deleteButton) {
@@ -75,7 +137,7 @@ function configureDownload(capture: StoredCapture): void {
 
   downloadButton.disabled = false;
 
-  downloadButton.addEventListener('click', () => {
+  downloadButton.onclick = () => {
     if (!currentObjectUrl) {
       return;
     }
@@ -87,7 +149,103 @@ function configureDownload(capture: StoredCapture): void {
     link.download = createDownloadFilename(capture.captureId);
 
     link.click();
-  });
+  };
+}
+
+function supportsImageClipboard(): boolean {
+  return (
+    window.isSecureContext &&
+    typeof ClipboardItem !== 'undefined' &&
+    Boolean(navigator.clipboard) &&
+    typeof navigator.clipboard.write === 'function'
+  );
+}
+
+async function copyCaptureToClipboard(): Promise<void> {
+  if (!copyButton || !currentCapture) {
+    return;
+  }
+
+  if (!supportsImageClipboard()) {
+    setStatus('This browser does not allow PNG image copying from the preview page.');
+
+    setCopyButtonFeedback('Copy unavailable', 'error');
+
+    return;
+  }
+
+  copyButton.disabled = true;
+  copyButton.textContent = 'Copying…';
+
+  try {
+    /*
+     * ClipboardItem needs a PNG Blob. Stored
+     * captures are already encoded as image/png,
+     * so no canvas re-encoding is required.
+     */
+    const pngBlob =
+      currentCapture.blob.type === 'image/png'
+        ? currentCapture.blob
+        : new Blob([await currentCapture.blob.arrayBuffer()], {
+            type: 'image/png',
+          });
+
+    const clipboardItem = new ClipboardItem({
+      'image/png': pngBlob,
+    });
+
+    await navigator.clipboard.write([clipboardItem]);
+
+    setStatus('The PNG image was copied to the clipboard.');
+
+    setCopyButtonFeedback('Copied!', 'success');
+
+    console.info('ChatRange: capture copied to clipboard.', {
+      captureId: currentCapture.captureId,
+
+      mimeType: pngBlob.type,
+
+      byteSize: pngBlob.size,
+
+      width: currentCapture.width,
+
+      height: currentCapture.height,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    console.error('ChatRange: failed to copy the capture.', {
+      captureId: currentCapture.captureId,
+
+      message,
+    });
+
+    setStatus(
+      'The PNG could not be copied. Keep the preview tab active, allow clipboard access, and try again.',
+    );
+
+    setCopyButtonFeedback('Copy failed', 'error');
+  } finally {
+    if (copyButton) {
+      copyButton.disabled = currentCapture === null;
+    }
+  }
+}
+
+function configureCopy(capture: StoredCapture): void {
+  if (!copyButton) {
+    return;
+  }
+
+  currentCapture = capture;
+
+  resetCopyButton();
+
+  copyButton.disabled = false;
+
+  copyButton.onclick = () => {
+    void copyCaptureToClipboard();
+  };
 }
 
 function configureDelete(capture: StoredCapture): void {
@@ -97,25 +255,39 @@ function configureDelete(capture: StoredCapture): void {
 
   deleteButton.disabled = false;
 
-  deleteButton.addEventListener(
-    'click',
-    () => {
-      void deleteCapture(capture.captureId)
-        .then(() => {
-          setUnavailableState('The capture was deleted.');
-        })
-        .catch((error: unknown) => {
-          console.error('ChatRange: failed to delete the capture.', error);
+  deleteButton.onclick = () => {
+    deleteButton.disabled = true;
 
-          if (statusElement) {
-            statusElement.textContent = 'The capture could not be deleted.';
+    if (copyButton) {
+      copyButton.disabled = true;
+    }
+
+    if (downloadButton) {
+      downloadButton.disabled = true;
+    }
+
+    void deleteCapture(capture.captureId)
+      .then(() => {
+        setUnavailableState('The capture was deleted.');
+      })
+      .catch((error: unknown) => {
+        console.error('ChatRange: failed to delete the capture.', error);
+
+        setStatus('The capture could not be deleted.');
+
+        deleteButton.disabled = false;
+
+        if (currentCapture) {
+          if (copyButton) {
+            copyButton.disabled = false;
           }
-        });
-    },
-    {
-      once: true,
-    },
-  );
+
+          if (downloadButton) {
+            downloadButton.disabled = false;
+          }
+        }
+      });
+  };
 }
 
 function displayCapture(capture: StoredCapture): void {
@@ -125,17 +297,20 @@ function displayCapture(capture: StoredCapture): void {
 
   revokeCurrentObjectUrl();
 
+  currentCapture = capture;
+
   currentObjectUrl = URL.createObjectURL(capture.blob);
 
   imageElement.src = currentObjectUrl;
 
   imageElement.hidden = false;
 
-  statusElement.textContent = 'Showing a cropped conversation-range capture stored in IndexedDB.';
+  setStatus('Showing a cropped conversation-range capture stored in IndexedDB.');
 
   if (metadataElement) {
     metadataElement.textContent =
-      `${capture.width} × ${capture.height} physical pixels · ` +
+      `${capture.width} × ` +
+      `${capture.height} physical pixels · ` +
       `Created ${formatTimestamp(capture.createdAt)} · ` +
       `Expires ${formatTimestamp(capture.expiresAt)}`;
 
@@ -143,6 +318,7 @@ function displayCapture(capture: StoredCapture): void {
   }
 
   configureDownload(capture);
+  configureCopy(capture);
   configureDelete(capture);
 }
 
@@ -168,7 +344,14 @@ async function loadCapture(): Promise<void> {
   displayCapture(capture);
 }
 
-window.addEventListener('beforeunload', revokeCurrentObjectUrl);
+function cleanUpPreview(): void {
+  clearCopyButtonResetTimer();
+  revokeCurrentObjectUrl();
+
+  currentCapture = null;
+}
+
+window.addEventListener('beforeunload', cleanUpPreview);
 
 void loadCapture().catch((error: unknown) => {
   console.error('ChatRange: failed to load the IndexedDB capture.', error);

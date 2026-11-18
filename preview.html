@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
     <title>ChatRange Preview</title>
 
     <style>
@@ -46,38 +48,84 @@
 
       .toolbar {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 16px;
         margin-bottom: 20px;
       }
 
+      .toolbar-copy {
+        min-width: 0;
+      }
+
       .actions {
         display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
         gap: 10px;
       }
 
       button {
+        min-height: 42px;
         border: 0;
         border-radius: 8px;
         padding: 10px 16px;
         color: #ffffff;
         font: inherit;
         font-weight: 600;
+        white-space: nowrap;
         cursor: pointer;
+        transition:
+          background-color 120ms ease,
+          opacity 120ms ease,
+          transform 120ms ease;
+      }
+
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
+
+      button:focus-visible {
+        outline: 3px solid #93c5fd;
+        outline-offset: 2px;
       }
 
       button:disabled {
         cursor: not-allowed;
         opacity: 0.5;
+        transform: none;
       }
 
       #download {
         background: #2563eb;
       }
 
+      #download:hover:not(:disabled) {
+        background: #1d4ed8;
+      }
+
+      #copy-capture {
+        background: #047857;
+      }
+
+      #copy-capture:hover:not(:disabled) {
+        background: #065f46;
+      }
+
+      #copy-capture.copy-success {
+        background: #15803d;
+      }
+
+      #copy-capture.copy-error {
+        background: #b45309;
+      }
+
       #delete-capture {
         background: #b91c1c;
+      }
+
+      #delete-capture:hover:not(:disabled) {
+        background: #991b1b;
       }
 
       .capture-frame {
@@ -97,13 +145,39 @@
       #capture[hidden] {
         display: none;
       }
+
+      @media (max-width: 760px) {
+        main {
+          padding: 16px;
+        }
+
+        .toolbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .actions {
+          justify-content: flex-start;
+        }
+      }
+
+      @media (max-width: 460px) {
+        .actions {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+
+        button {
+          width: 100%;
+        }
+      }
     </style>
   </head>
 
   <body>
     <main>
       <div class="toolbar">
-        <div>
+        <div class="toolbar-copy">
           <h1>ChatRange Capture Preview</h1>
 
           <p id="status">Loading the selected capture...</p>
@@ -111,8 +185,17 @@
           <p id="metadata" hidden></p>
         </div>
 
-        <div class="actions">
+        <div class="actions" aria-label="Capture actions">
           <button id="download" type="button" disabled>Download PNG</button>
+
+          <button
+            id="copy-capture"
+            type="button"
+            title="Copy the PNG image to the clipboard"
+            disabled
+          >
+            Copy PNG
+          </button>
 
           <button id="delete-capture" type="button" disabled>Delete capture</button>
         </div>
