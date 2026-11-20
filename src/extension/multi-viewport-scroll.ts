@@ -328,12 +328,18 @@ export function createMultiViewportScrollPlan(
   const startScrollTopCssPx = clamp(rangeTopCssPx, 0, container.maximumScrollTopCssPx);
 
   /*
-   * The final capture is allowed to use the full
-   * visible container. Position it so the range
-   * bottom is visible without applying the safe
-   * bottom inset to the last segment.
+   * Keep the selected range bottom above the unsafe
+   * lower viewport band, including in the final
+   * segment.
+   *
+   * Chat interfaces such as Microsoft Copilot can
+   * render a fade, footer, composer overlay, or
+   * scroll control across the lower viewport area.
+   * Using the effective capture height moves the
+   * final selected line into the clear region before
+   * the screenshot is cropped.
    */
-  const desiredEndScrollTopCssPx = rangeBottomCssPx - container.clientHeightCssPx;
+  const desiredEndScrollTopCssPx = rangeBottomCssPx - effectiveCaptureHeightCssPx;
 
   const endScrollTopCssPx = clamp(
     Math.max(startScrollTopCssPx, desiredEndScrollTopCssPx),
