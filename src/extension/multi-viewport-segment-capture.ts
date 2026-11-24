@@ -18,7 +18,7 @@ import {
   scrollToPosition,
 } from './multi-viewport-scroll';
 
-const MAXIMUM_VIEWPORT_SEGMENTS = 20;
+const MAXIMUM_VIEWPORT_SEGMENTS = 60;
 
 /*
  * ChatGPT currently needs the shared 96 CSS pixel
