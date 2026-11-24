@@ -3,8 +3,8 @@ import type { CaptureRectangle, CaptureViewport } from './capture-messages';
 export const DEFAULT_TARGET_OVERLAP_CSS_PX = 120;
 export const MINIMUM_SCROLL_MOVEMENT_CSS_PX = 8;
 export const MAXIMUM_REPEATED_SCROLL_POSITIONS = 3;
-export const MAXIMUM_VIEWPORT_SEGMENTS = 20;
-export const MAXIMUM_COMPOSED_HEIGHT_PHYSICAL_PX = 32_000;
+export const MAXIMUM_VIEWPORT_SEGMENTS = 60;
+export const MAXIMUM_COMPOSED_HEIGHT_PHYSICAL_PX = 64_000;
 
 export type MultiViewportCaptureState =
   'idle' | 'preparing' | 'capturing' | 'composing' | 'completed' | 'cancelled' | 'failed';

@@ -6,7 +6,7 @@ export const DEFAULT_SAFE_BOTTOM_INSET_CSS_PX = 96;
 
 export const MINIMUM_SCROLL_MOVEMENT_CSS_PX = 8;
 
-export const MAXIMUM_VIEWPORT_SEGMENTS = 20;
+export const MAXIMUM_VIEWPORT_SEGMENTS = 60;
 
 export interface ScrollContainerMetrics {
   element: HTMLElement;

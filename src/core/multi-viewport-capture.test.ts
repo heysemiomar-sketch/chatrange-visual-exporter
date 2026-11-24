@@ -99,9 +99,9 @@ describe('multi-viewport capture model', () => {
 
     expect(session.segments).toEqual([]);
 
-    expect(session.limits.maximumSegments).toBe(20);
+    expect(session.limits.maximumSegments).toBe(60);
 
-    expect(session.limits.maximumComposedHeightPhysicalPx).toBe(32_000);
+    expect(session.limits.maximumComposedHeightPhysicalPx).toBe(64_000);
 
     expect(session.limits.targetOverlapCssPx).toBe(120);
 
