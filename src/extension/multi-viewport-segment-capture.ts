@@ -449,7 +449,17 @@ export async function captureMultiViewportSegments(
 
       const isFinalSegment = segmentIndex === plan.positionsCssPx.length - 1;
 
-      const appliedSafeBottomInsetCssPx = isFinalSegment ? 0 : plan.safeBottomInsetCssPx;
+      /*
+       * Apply the safe lower viewport inset to every
+       * segment, including the final segment.
+       *
+       * The scroll plan already moves the selected
+       * range bottom into the remaining clear capture
+       * band. Keeping the inset on the final segment
+       * therefore removes the lower fade or overlay
+       * without removing the selected endpoint.
+       */
+      const appliedSafeBottomInsetCssPx = plan.safeBottomInsetCssPx;
 
       const crop = getVisibleRangeCrop(container, rangeBounds, actualScrollTopCssPx, {
         isFinalSegment,
