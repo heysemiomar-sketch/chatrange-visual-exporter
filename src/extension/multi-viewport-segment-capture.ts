@@ -33,7 +33,7 @@ const COPILOT_SAFE_BOTTOM_INSET_CSS_PX = 160;
 
 const COPILOT_HOSTNAMES = new Set(['copilot.cloud.microsoft', 'copilot.microsoft.com']);
 
-const GEMINI_SAFE_BOTTOM_INSET_CSS_PX = 96;
+const GEMINI_SAFE_BOTTOM_INSET_CSS_PX = 160;
 
 const GEMINI_HOSTNAMES = new Set(['gemini.google.com']);
 
