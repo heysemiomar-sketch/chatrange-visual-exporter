@@ -9,7 +9,8 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://copilot.cloud.microsoft/*",
-    "https://copilot.microsoft.com/*"
+    "https://copilot.microsoft.com/*",
+    "https://gemini.google.com/*"
   ],
   "background": {
     "service_worker": "assets/background.js",

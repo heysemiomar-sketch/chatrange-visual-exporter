@@ -13,10 +13,17 @@ const OVERLAY_SELECTORS = [
 
   '#m365-chat-input-shared-container',
   '[data-test-id="chat-input-wrapper"]',
+  '.input-area-fieldset',
+  '.text-input-field',
   '[data-testid="scroll-bottom-indicator"]',
   '#suggestions-above-input-portal',
   '[data-testid="grounding-menu"]',
   '[data-testid="bebop-lite-content-below"]',
+
+  /* Google Gemini */
+  '.text-input-field',
+  '.input-area-fieldset',
+  'button.back-to-bottom-fab',
 
   'button[aria-label="Scroll to bottom"]',
   'button[aria-label="scroll to bottom"]',
@@ -34,6 +41,12 @@ const INPUT_SELECTORS = [
   '#m365-chat-editor-target-element',
   '[contenteditable="true"][aria-label="Message Copilot"]',
   '[contenteditable="true"][data-placeholder="Message Copilot"]',
+
+  /* Google Gemini */
+  '.text-input-field [contenteditable="true"]',
+  '.input-area-fieldset [contenteditable="true"]',
+  '[contenteditable="true"][aria-label*="Gemini"]',
+  'textarea[aria-label*="Gemini"]',
 ];
 
 const COMPOSER_ROOT_SELECTORS = [
@@ -106,6 +119,15 @@ function installSuppressionStyle(): void {
 
     html[${CAPTURE_MODE_ATTRIBUTE}="true"]
       [data-testid="bebop-lite-content-below"],
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      .text-input-field,
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      .input-area-fieldset,
+
+    html[${CAPTURE_MODE_ATTRIBUTE}="true"]
+      button.back-to-bottom-fab,
 
     html[${CAPTURE_MODE_ATTRIBUTE}="true"]
       button[aria-label*="Scroll to bottom"],

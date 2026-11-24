@@ -21,6 +21,7 @@ const SUPPORTED_HOSTS = new Set([
   'chat.openai.com',
   'copilot.cloud.microsoft',
   'copilot.microsoft.com',
+  'gemini.google.com',
 ]);
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
@@ -377,11 +378,14 @@ chrome.action.onClicked.addListener((tab) => {
   }
 
   if (!isSupportedUrl(tab.url)) {
-    console.warn('ChatRange: open a supported ChatGPT or Microsoft Copilot conversation first.', {
-      url: tab.url ?? null,
+    console.warn(
+      'ChatRange: open a supported ChatGPT, Microsoft Copilot, or Google Gemini conversation first.',
+      {
+        url: tab.url ?? null,
 
-      supportedHosts: [...SUPPORTED_HOSTS],
-    });
+        supportedHosts: [...SUPPORTED_HOSTS],
+      },
+    );
 
     return;
   }
