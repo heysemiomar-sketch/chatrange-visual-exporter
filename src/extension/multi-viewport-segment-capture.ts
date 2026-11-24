@@ -33,6 +33,10 @@ const COPILOT_SAFE_BOTTOM_INSET_CSS_PX = 160;
 
 const COPILOT_HOSTNAMES = new Set(['copilot.cloud.microsoft', 'copilot.microsoft.com']);
 
+const GEMINI_SAFE_BOTTOM_INSET_CSS_PX = 160;
+
+const GEMINI_HOSTNAMES = new Set(['gemini.google.com']);
+
 interface RangeBoundsInContainer {
   topCssPx: number;
   bottomCssPx: number;
@@ -46,6 +50,10 @@ interface VisibleRangeCropOptions {
 function getPlatformSafeBottomInsetCssPx(): number {
   if (COPILOT_HOSTNAMES.has(window.location.hostname)) {
     return COPILOT_SAFE_BOTTOM_INSET_CSS_PX;
+  }
+
+  if (GEMINI_HOSTNAMES.has(window.location.hostname)) {
+    return GEMINI_SAFE_BOTTOM_INSET_CSS_PX;
   }
 
   return DEFAULT_SAFE_BOTTOM_INSET_CSS_PX;

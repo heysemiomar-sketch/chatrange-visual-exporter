@@ -4,7 +4,9 @@ import { chatGptAdapter } from './chatgpt';
 
 import { copilotAdapter } from './copilot';
 
-const ADAPTERS: ChatAdapter[] = [copilotAdapter, chatGptAdapter];
+import { geminiAdapter } from './gemini';
+
+const ADAPTERS: ChatAdapter[] = [geminiAdapter, copilotAdapter, chatGptAdapter];
 
 export function findSupportedChatAdapter(): ChatAdapter | null {
   return ADAPTERS.find((adapter) => adapter.isSupportedPage()) ?? null;
